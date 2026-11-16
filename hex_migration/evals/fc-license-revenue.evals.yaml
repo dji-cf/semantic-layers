@@ -1,0 +1,56 @@
+name: "FC license revenue (GRL) checks"
+id: fc-license-revenue-checks
+cases:
+  - id: grl-latest
+    prompt: "What is FY26 revenue by license in the latest forecast?"
+    attempts: 1
+    rubrics:
+      - id: revenue_by_license_matches
+        type: judge_final_answer
+        criterion: "Does the answer give FY2026 hedged revenue ($M) by license for the latest forecast only (one version, labelled with its version label), matching the expected SQL within rounding, and include the 'Unallocated (not in license cube)' row in the total?"
+        expectedSql:
+          sql: |
+            SELECT MAX(version_label) AS version_label, license, ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(hedge_revenue), 2) AS hedge,
+                   ROUND(SUM(unhedged_net_revenue), 2) AS unhedged_revenue
+            FROM ORACLE_DATA_PROD.SANDBOX.FC_LICENSE_REVENUE_V
+            WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+            GROUP BY license
+            ORDER BY revenue DESC
+          dataConnectionId: "01a11848-a092-7729-a954-c8db37991b8b"
+  - id: intl-hedge
+    prompt: "How much of International revenue is the hedge, by license?"
+    attempts: 1
+    rubrics:
+      - id: intl_hedge_matches
+        type: judge_final_answer
+        criterion: "Does the answer show, for the latest forecast (labelled) and the latest cycle's fiscal year, International hedge ($M) by license / sub-license alongside revenue and unhedged revenue, limited to lines with a non-zero hedge, matching the expected SQL within rounding?"
+        expectedSql:
+          sql: |
+            SELECT MAX(version_label) AS version_label, license, sub_license, ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(hedge_revenue), 2) AS hedge,
+                   ROUND(SUM(unhedged_net_revenue), 2) AS unhedged_revenue
+            FROM ORACLE_DATA_PROD.SANDBOX.FC_LICENSE_REVENUE_V
+            WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND segment = 'International'
+            GROUP BY license, sub_license
+            HAVING SUM(hedge_revenue) <> 0
+            ORDER BY hedge
+          dataConnectionId: "01a11848-a092-7729-a954-c8db37991b8b"
+  - id: digital-mix-by-license
+    prompt: "Which licenses make up Digital revenue and how did they change versus the prior forecast?"
+    attempts: 1
+    rubrics:
+      - id: digital_vs_pfc_matches
+        type: judge_final_answer
+        criterion: "Does the answer list Digital revenue ($M) by license for the latest forecast and the prior forecast (both labelled by version label) and the change between them, matching the expected SQL within rounding, without self-joining or summing across versions?"
+        expectedSql:
+          sql: |
+            SELECT license,
+                   MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+                   MAX(IFF(is_prior_fc, version_label, NULL)) AS pfc_version_label,
+                   ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)), 2) AS revenue,
+                   ROUND(SUM(IFF(is_prior_fc, net_revenue, 0)), 2) AS pfc_revenue,
+                   ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(is_prior_fc, net_revenue, 0)), 2) AS revenue_vs_pfc
+            FROM ORACLE_DATA_PROD.SANDBOX.FC_LICENSE_REVENUE_V
+            WHERE (is_latest_fc = TRUE OR is_prior_fc = TRUE) AND fiscal_year = 2026 AND segment = 'Digital'
+            GROUP BY license
+            ORDER BY revenue_vs_pfc
+          dataConnectionId: "01a11848-a092-7729-a954-c8db37991b8b"

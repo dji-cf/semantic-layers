@@ -1,0 +1,227 @@
+type: model
+id: fc_license_revenue
+name: FC License Revenue (GRL)
+description: |
+  Fanatics Collectibles revenue by license / league (Global Revenue by License, GRL) for North America,
+  International and Digital, by forecast version and month, with the hedge (timing holdback) and unhedged revenue.
+  Grain: one row per version_code x month (period_date) x segment x sub_license. Amounts in USD millions ($M).
+  Perimeter: North America, International and Digital; REVENUE ONLY (no margin, CM or EBITDA). Excludes Fanatics
+  Collect, GCP manufacturing and eliminations.
+  Always filter to exactly ONE version (version_code or is_latest_fc / is_prior_fc) and ONE fiscal_year per query;
+  summing across versions double counts.
+  Planning-cube basis: ties to segment revenue in total via an explicit 'Unallocated (not in license cube)' row;
+  per-license figures land within ~1% of the deck GRL page.
+  is_latest_fc is the newest cycle loaded in THIS dataset (the league cube) and can lag the segment P&L by a cycle.
+  Synonyms: GRL, revenue by license, revenue by league, license revenue
+base_sql_table: ORACLE_DATA_PROD.SANDBOX.FC_LICENSE_REVENUE_V
+dimensions:
+  - id: row_key
+    type: string
+    unique: true
+    visibility: internal
+    expr_sql: VERSION_CODE || '|' || TO_VARCHAR(PERIOD_DATE) || '|' || SEGMENT || '|' || SUB_LICENSE
+    description: Grain key (version_code | period_date | segment | sub_license).
+  - id: version_code
+    type: string
+    expr_sql: VERSION_CODE
+    name: Version code
+    description: |
+      Planning version code: '<MON><YY>RF' = Monthly Forecast for that cycle month, 'Plan_<year>' = Budget, 'Actual'.
+      Synonyms: version, scenario, forecast cycle
+  - id: version_label
+    type: string
+    expr_sql: VERSION_LABEL
+    name: Version label
+    description: Display label, e.g. '<Mon> <YYYY> FC'. Return it with every version-based figure.
+  - id: latest_fc_label
+    type: string
+    expr_sql: LATEST_FC_LABEL
+    name: Latest forecast label
+    description: |
+      Label of the newest Monthly Forecast loaded in the league cube (same value on every row).
+      Synonyms: latest forecast name
+  - id: version_type
+    type: string
+    expr_sql: VERSION_TYPE
+    name: Version type
+    description: |
+      Kind of version.
+      Values: Actual, Budget, Monthly Forecast
+  - id: pfc_version_code
+    type: string
+    expr_sql: PFC_VERSION_CODE
+    name: Prior forecast version code
+    description: |
+      Cycle immediately before this version among cycles loaded in the league cube (e.g. <MON><YY>RF -> the previous month's RF).
+      Synonyms: prior forecast version
+  - id: pfc_version_label
+    type: string
+    expr_sql: PFC_VERSION_LABEL
+    name: Prior forecast version label
+    description: |
+      Display label of pfc_version_code.
+      Synonyms: prior forecast name
+  - id: is_latest_fc
+    type: boolean
+    expr_sql: IS_LATEST_FC
+    name: Is latest forecast
+    description: |
+      TRUE for the newest Monthly Forecast loaded in the league cube (may be older than the segment P&L's latest).
+      Synonyms: latest forecast, current forecast
+  - id: is_prior_fc
+    type: boolean
+    expr_sql: IS_PRIOR_FC
+    name: Is prior forecast
+    description: |
+      TRUE for the cycle immediately before is_latest_fc among cycles loaded in the league cube.
+      Synonyms: prior forecast, PFC, previous forecast
+  - id: fiscal_year
+    type: number
+    expr_sql: FISCAL_YEAR
+    name: Fiscal year
+    description: |
+      Fiscal (= calendar) year.
+      Synonyms: FY, year
+  - id: fiscal_quarter
+    type: string
+    expr_sql: FISCAL_QUARTER
+    name: Fiscal quarter
+    description: |
+      Fiscal quarter.
+      Values: Q1, Q2, Q3, Q4
+      Synonyms: quarter
+  - id: month_number
+    type: number
+    expr_sql: MONTH_NUMBER
+    name: Month number
+    description: |
+      Month 1-12.
+      Synonyms: month
+  - id: af_flag
+    type: string
+    expr_sql: AF_FLAG
+    name: Actual / forecast flag
+    description: |
+      'A' closed month, 'F' forecast month, 'Plan' budget.
+      Values: A, F, Plan
+      Synonyms: actual or forecast
+  - id: segment
+    type: string
+    expr_sql: SEGMENT
+    name: Segment
+    description: |
+      North America (Topps Domestic), International, or Digital.
+      Values: North America, International, Digital
+      Synonyms: region, LOB
+  - id: license
+    type: string
+    expr_sql: LICENSE
+    name: License
+    description: |
+      Deck GRL license line. Baseball = MLB; Basketball = NBA; Football = NFL; Total Soccer = UEFA, EPL,
+      Club Exclusives, Bundesliga, MLS, UEFA Euro; Total Disney = Disney, Marvel, Star Wars; Total TKO = WWE, UFC.
+      Values: Baseball, Basketball, Football, Total Soccer, Total Disney, Total TKO, Formula 1, Sports - Other,
+      Entertainment - Other, Tennis, NIL, Unallocated (not in license cube)
+      Synonyms: league, sport, property, license group, GRL line
+  - id: sub_license
+    type: string
+    expr_sql: SUB_LICENSE
+    name: Sub-license
+    description: |
+      Detailed license under the GRL line, e.g. UEFA, EPL, Club Exclusives, Bundesliga, MLS, Marvel, Disney, Star Wars,
+      WWE, UFC, NBA, NFL, Baseball.
+      Synonyms: sub-license, licensor
+  - id: is_reconciling
+    type: boolean
+    expr_sql: IS_RECONCILING
+    name: Is reconciling row
+    description: TRUE for the 'Unallocated (not in license cube)' row that closes the gap to segment revenue.
+  - id: period_date
+    type: date
+    expr_sql: PERIOD_DATE
+    name: Period date
+    description: First day of the month.
+  - id: cycle_month
+    type: date
+    expr_sql: CYCLE_MONTH
+    name: Cycle month
+    description: Forecast cycle month (orders versions).
+  - id: net_revenue
+    type: number
+    visibility: internal
+    expr_sql: NET_REVENUE
+    name: Net revenue
+    description: |
+      Net revenue AFTER the hedge holdback ($M) -- the headline (hedged) figure.
+      Synonyms: revenue, hedged revenue, sales
+  - id: hedge_revenue
+    type: number
+    visibility: internal
+    expr_sql: HEDGE_REVENUE
+    name: Hedge revenue
+    description: |
+      Hedge holdback included in net_revenue ($M; negative = revenue held back for timing risk).
+      Synonyms: hedge, holdback, timing hedge
+  - id: unhedged_net_revenue
+    type: number
+    visibility: internal
+    expr_sql: UNHEDGED_NET_REVENUE
+    name: Unhedged net revenue
+    description: |
+      Net revenue before the hedge = net_revenue - hedge_revenue ($M).
+      Synonyms: unhedged revenue, revenue before hedge
+measures:
+  - id: total_license_revenue
+    func: sum
+    of: net_revenue
+    name: License revenue
+    description: |
+      SUM of net_revenue ($M), hedged headline. Filter to one version and one fiscal_year.
+      Synonyms: revenue, GRL revenue, hedged revenue, sales
+  - id: total_hedge
+    func: sum
+    of: hedge_revenue
+    name: Hedge
+    description: |
+      SUM of hedge_revenue ($M; negative = held back).
+      Synonyms: hedge, holdback, timing hedge
+  - id: total_unhedged_revenue
+    func: sum
+    of: unhedged_net_revenue
+    name: Unhedged revenue
+    description: |
+      SUM of unhedged_net_revenue ($M), revenue before the hedge.
+      Synonyms: unhedged revenue, revenue before hedge
+  - id: latest_fc_license_revenue
+    func: sum
+    of: net_revenue
+    filters: [is_latest_fc]
+    name: Latest FC license revenue
+    description: Net revenue ($M) in the newest cycle loaded in this dataset (is_latest_fc). Pair with version_label.
+  - id: prior_fc_license_revenue
+    func: sum
+    of: net_revenue
+    filters: [is_prior_fc]
+    name: Prior FC license revenue
+    description: |
+      Net revenue ($M) in the prior cycle (is_prior_fc).
+      Synonyms: PFC revenue, prior forecast revenue
+  - id: latest_fc_hedge
+    func: sum
+    of: hedge_revenue
+    filters: [is_latest_fc]
+    name: Latest FC hedge
+    description: Hedge ($M) in the newest cycle loaded in this dataset (is_latest_fc).
+  - id: prior_fc_hedge
+    func: sum
+    of: hedge_revenue
+    filters: [is_prior_fc]
+    name: Prior FC hedge
+    description: Hedge ($M) in the prior cycle (is_prior_fc).
+  - id: license_revenue_vs_prior_fc
+    func_sql: SUM(IFF(${is_latest_fc}, ${net_revenue}, 0)) - SUM(IFF(${is_prior_fc}, ${net_revenue}, 0))
+    name: License revenue vs prior FC
+    description: |
+      Latest-cycle net revenue minus prior-cycle net revenue ($M). Filter rows to is_latest_fc OR is_prior_fc and one
+      fiscal_year; there are no pfc columns in this dataset.
+      Synonyms: change vs PFC, vs prior forecast, since last month

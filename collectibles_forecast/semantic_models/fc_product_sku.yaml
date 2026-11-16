@@ -1,0 +1,241 @@
+name: FC_PRODUCT_SKU
+description: >-
+  North America (Topps Domestic physical cards) forecast at SKU x sales channel x month, with product-release
+  attributes (COA, product name, product-year, street dates) for every Monthly Forecast cycle loaded in the SKU
+  forecast history and the Budget. USD millions ($M). Totals tie to the segment P&L North America revenue (net of
+  eliminations) within ~$2M for the same cycle. The SKU history can lag the segment P&L by a cycle: is_latest_fc here
+  is the newest SKU cycle (see latest_fc_label). Use for SKU, channel and product-release questions and for
+  reconciling North America to the SKU forecast.
+
+tables:
+  - name: fc_product_sku
+    description: >-
+      One row per version_code x month x SKU x channel. Amounts in $M; volume in cases. Each row also carries the prior
+      forecast cycle (pfc_*) and Budget (budget_*) values for the same SKU, channel and month. Always filter to ONE
+      version_code and ONE fiscal_year. NORTH AMERICA ONLY: no International, Digital or Fanatics Collect SKUs exist.
+    base_table:
+      database: ORACLE_DATA_PROD
+      schema: SANDBOX
+      table: FC_PRODUCT_SKU_V
+
+    dimensions:
+      - name: version_code
+        synonyms: ["version", "scenario", "forecast cycle"]
+        description: "Planning version code: '<MON><YY>RF' = Monthly Forecast for that cycle month (e.g. JUN26RF = Jun 2026 FC), 'Plan_<year>' = Budget."
+        expr: VERSION_CODE
+        data_type: TEXT
+        sample_values: ["SEP26RF", "AUG26RF", "JUL26RF", "Plan_2026"]
+      - name: version_label
+        description: Display label e.g. 'Jun 2026 FC'. Return it with every version-based figure.
+        expr: VERSION_LABEL
+        data_type: TEXT
+      - name: pfc_version_code
+        synonyms: ["prior forecast version"]
+        description: Cycle immediately before this version among cycles loaded in the SKU history; the pfc_* facts hold its values.
+        expr: PFC_VERSION_CODE
+        data_type: TEXT
+      - name: pfc_version_label
+        synonyms: ["prior forecast name"]
+        description: Display label of pfc_version_code. Return it whenever pfc_* facts are used.
+        expr: PFC_VERSION_LABEL
+        data_type: TEXT
+      - name: latest_fc_label
+        synonyms: ["latest forecast name"]
+        description: Label of the newest Monthly Forecast loaded in the SKU history (same value on every row).
+        expr: LATEST_FC_LABEL
+        data_type: TEXT
+      - name: version_type
+        description: Budget / Monthly Forecast.
+        expr: VERSION_TYPE
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["Budget", "Monthly Forecast"]
+      - name: is_latest_fc
+        synonyms: ["latest forecast", "current forecast"]
+        description: TRUE for the newest Monthly Forecast loaded in the SKU history (may be older than the segment P&L's latest).
+        expr: IS_LATEST_FC
+        data_type: BOOLEAN
+      - name: is_prior_fc
+        synonyms: ["prior forecast", "previous forecast"]
+        description: TRUE for the cycle immediately before is_latest_fc among cycles loaded in the SKU history.
+        expr: IS_PRIOR_FC
+        data_type: BOOLEAN
+      - name: fiscal_year
+        synonyms: ["FY", "year"]
+        description: Fiscal (= calendar) year of the revenue month. NOT the product-year in the product name.
+        expr: FISCAL_YEAR
+        data_type: NUMBER
+      - name: fiscal_quarter
+        synonyms: ["quarter"]
+        description: Q1-Q4 of the revenue month.
+        expr: FISCAL_QUARTER
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["Q1", "Q2", "Q3", "Q4"]
+      - name: month_number
+        synonyms: ["month"]
+        description: Revenue month 1-12.
+        expr: MONTH_NUMBER
+        data_type: NUMBER
+      - name: af_flag
+        synonyms: ["actual or forecast"]
+        description: "'A' closed month, 'F' forecast month, 'Plan' budget."
+        expr: AF_FLAG
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["A", "F", "Plan"]
+      - name: sku
+        synonyms: ["item", "item number", "SKU code"]
+        description: Oracle item / SKU code (e.g. FGC005993-CSE).
+        expr: SKU
+        data_type: TEXT
+      - name: channel_desc
+        synonyms: ["channel", "sales channel", "customer channel"]
+        description: Sales channel, e.g. Hobby Shop, Hobby Distributor, Breaker, Topps.com, Fanatics.com, Amazon.Com, Retail Distributor - MJH.
+        expr: CHANNEL_DESC
+        data_type: TEXT
+        sample_values: ["Hobby Shop", "Hobby Distributor", "Hobby D2C Distributor", "Breaker", "Topps.com", "Fanatics.com",
+                        "Amazon.Com", "Retail Direct", "Retail Distributor - MJH", "Retail Distributor - Excell", "Internal - Other"]
+      - name: channel_group
+        synonyms: ["channel group", "channel type", "wholesale vs DTC"]
+        description: Grouped channel.
+        expr: CHANNEL_GROUP
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["Hobby & Breakers", "Retail", "eCommerce / DTC", "Internal / Intercompany", "Planning input / unassigned", "Other"]
+      - name: coa
+        synonyms: ["product code", "product id", "title code", "COA"]
+        description: Product (release) identifier. Lettered COAs like NFL2502 are named product releases.
+        expr: COA
+        data_type: TEXT
+      - name: product_name
+        synonyms: ["product", "release", "product release", "set", "title"]
+        description: >-
+          Product release name, e.g. '2026 Topps Series 1 Baseball'. The year in the name is the PRODUCT-YEAR, not
+          the release date (a '2025' product can street in 2026). Similar names are distinct products.
+        expr: PRODUCT_NAME
+        data_type: TEXT
+      - name: product_year
+        synonyms: ["product year", "season"]
+        description: Year prefix parsed from the product name (e.g. '2025' or '2025/26'). Not the street date.
+        expr: PRODUCT_YEAR
+        data_type: TEXT
+      - name: is_release_coa
+        synonyms: ["is product release"]
+        description: TRUE when the COA is a lettered product release (vs general / Topps NOW / hedge buckets).
+        expr: IS_RELEASE_COA
+        data_type: BOOLEAN
+      - name: street_year
+        description: Calendar year of the street date in this version.
+        expr: STREET_YEAR
+        data_type: NUMBER
+      - name: street_date_move_vs_pfc
+        synonyms: ["street date move", "SD delayed", "SD accelerated", "timing shift"]
+        description: "Street date in this version vs the prior forecast - SD Accelerated / SD Delayed / No change."
+        expr: STREET_DATE_MOVE_VS_PFC
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["SD Accelerated", "SD Delayed", "No change"]
+
+    time_dimensions:
+      - name: period_date
+        description: First day of the revenue month.
+        expr: PERIOD_DATE
+        data_type: DATE
+      - name: street_date
+        synonyms: ["release date", "launch date", "SD", "ship date"]
+        description: Product street (release) date in this forecast version.
+        expr: STREET_DATE
+        data_type: DATE
+      - name: pfc_street_date
+        synonyms: ["prior street date"]
+        description: Street date in the prior forecast cycle.
+        expr: PFC_STREET_DATE
+        data_type: DATE
+      - name: budget_street_date
+        description: Street date in the Budget.
+        expr: BUDGET_STREET_DATE
+        data_type: DATE
+
+    facts:
+      - {name: net_revenue, synonyms: ["revenue", "sales"], description: "Net revenue excl. intercompany ($M).", expr: NET_REVENUE, data_type: NUMBER}
+      - {name: contribution_margin, synonyms: ["CM"], description: "Contribution margin from the SKU planning model ($M).", expr: CONTRIBUTION_MARGIN, data_type: NUMBER}
+      - {name: volume_cases, synonyms: ["cases", "units", "volume"], description: "Volume in cases.", expr: VOLUME_CASES, data_type: NUMBER}
+      - {name: pfc_net_revenue, synonyms: ["prior forecast revenue"], description: "Prior forecast cycle (pfc_version_label) net revenue for the same SKU/channel/month ($M). Only for 'prior forecast' comparisons.", expr: PFC_NET_REVENUE, data_type: NUMBER}
+      - {name: pfc_contribution_margin, description: "Prior forecast CM ($M).", expr: PFC_CONTRIBUTION_MARGIN, data_type: NUMBER}
+      - {name: pfc_volume_cases, description: "Prior forecast volume (cases).", expr: PFC_VOLUME_CASES, data_type: NUMBER}
+      - {name: budget_net_revenue, synonyms: ["budget revenue", "plan revenue"], description: "Budget (Plan_<fiscal_year>) net revenue for the same SKU/channel/month ($M).", expr: BUDGET_NET_REVENUE, data_type: NUMBER}
+      - {name: budget_contribution_margin, synonyms: ["budget CM"], description: "Budget CM ($M).", expr: BUDGET_CONTRIBUTION_MARGIN, data_type: NUMBER}
+      - {name: budget_volume_cases, description: "Budget volume (cases).", expr: BUDGET_VOLUME_CASES, data_type: NUMBER}
+
+    metrics:
+      - {name: total_sku_revenue, description: "SUM of net_revenue ($M).", expr: SUM(net_revenue)}
+      - {name: total_sku_pfc_revenue, description: "SUM of pfc_net_revenue ($M).", expr: SUM(pfc_net_revenue)}
+      - {name: total_sku_budget_revenue, description: "SUM of budget_net_revenue ($M).", expr: SUM(budget_net_revenue)}
+      - {name: total_sku_cm, description: "SUM of contribution_margin ($M).", expr: SUM(contribution_margin)}
+      - {name: sku_count, description: "Distinct SKUs.", expr: COUNT(DISTINCT sku)}
+
+verified_queries:
+  - name: na_total_latest
+    question: "What is total North America revenue in the SKU forecast for FY26 in the latest forecast?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             ROUND(SUM(net_revenue), 2) AS sku_forecast_revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+             ROUND(SUM(budget_net_revenue), 2) AS budget_revenue
+      FROM __fc_product_sku
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+  - name: releases_vs_budget
+    question: "Which product releases have the largest forecast-to-budget variance in North America?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT MAX(version_label) AS version_label, coa, product_name, MIN(street_date) AS street_date, MIN(budget_street_date) AS budget_street_date,
+             ROUND(SUM(net_revenue), 2) AS fc_revenue, ROUND(SUM(budget_net_revenue), 2) AS budget_revenue,
+             ROUND(SUM(net_revenue) - SUM(budget_net_revenue), 2) AS revenue_vs_budget
+      FROM __fc_product_sku
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY coa, product_name
+      ORDER BY ABS(SUM(net_revenue) - SUM(budget_net_revenue)) DESC
+      LIMIT 20
+  - name: channel_change_vs_pfc
+    question: "Which channels drove the change in North America revenue versus the prior forecast?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label, channel_group, channel_desc,
+             ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+             ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc
+      FROM __fc_product_sku
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY channel_group, channel_desc
+      ORDER BY ABS(SUM(net_revenue) - SUM(pfc_net_revenue)) DESC
+  - name: street_date_moves
+    question: "Which product releases moved street date versus the prior forecast and what revenue moved with them?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             product_name, street_date_move_vs_pfc, MIN(pfc_street_date) AS pfc_street_date, MIN(street_date) AS street_date,
+             ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS fy_revenue_vs_pfc
+      FROM __fc_product_sku
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND street_date_move_vs_pfc IN ('SD Accelerated', 'SD Delayed')
+      GROUP BY product_name, street_date_move_vs_pfc
+      ORDER BY ABS(SUM(net_revenue) - SUM(pfc_net_revenue)) DESC
+
+module_custom_instructions:
+  sql_generation: |-
+    - Amounts are $M. Always filter to ONE version and ONE fiscal_year (default: is_latest_fc = TRUE and the fiscal year
+      of the latest cycle), except in the named-cycle comparison pattern below.
+    - is_latest_fc / is_prior_fc are the newest / second-newest cycles LOADED IN THE SKU HISTORY; never assume a month.
+      ALWAYS return version_label (plus pfc_version_label when using pfc_*) so the answer can be labelled from the result.
+    - vs prior forecast / since last month = fact minus pfc_<fact>; vs budget = fact minus budget_<fact>. Never self-join.
+    - vs a NAMED cycle ('<MON><YY>RF'): do NOT use pfc_*. Use WHERE (is_latest_fc = TRUE OR version_code = '<NAMED>') and
+      SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = '<NAMED>', net_revenue, 0)), with
+      MAX(IFF(.., version_label, NULL)) for each side's label. If the named cycle is not loaded here, say so.
+    - Product questions: group by coa AND product_name (similar names are different products). A year mentioned with a
+      product is part of the product name (product_year), never the street date or fiscal_year.
+    - Use channel_desc for channel detail, channel_group for summaries.
+    - ROUNDING: wrap EVERY numeric output column of the FINAL SELECT in ROUND(<expr>, 2) (hundredths), e.g.
+      ROUND(SUM(net_revenue), 2) -- amounts, variances and volume_cases; shares / growth rates in percent:
+      ROUND(100 * <ratio>, 2) AS <name>_pct. Round only in the final projection -- never
+      inside CTEs, before an aggregate, or in WHERE / HAVING / ORDER BY. Do not round fiscal_year, month_number or
+      COUNT results.
+  question_categorization: |-
+    North America physical cards only. There is no International, Digital or Fanatics Collect SKU data, no
+    prior-year (PY) product comparison, no GMV and no EBITDA at SKU grain. Say so instead of guessing.

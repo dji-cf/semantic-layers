@@ -1,0 +1,522 @@
+name: FC Forecast Dashboard sample questions
+id: fc-forecast-dashboard
+# The 20 "Forecast Dashboard: Sample Questions for the Semantic Layer", prompts verbatim.
+# Quoted figures in the prompts (+3% revenue, +$88M EBITDA, +57 / -317 bps GM, Oct -4% / Nov +10% / Dec -3%,
+# Digital -6%) were written against Sep 2026 FC vs Aug 2026 FC. Expected SQL stays data-driven (is_latest_fc),
+# so the criteria check that the agent tests quoted figures against the data instead of echoing them.
+# Targets the semantic models synced from the Snowflake semantic views (collectibles_forecast/semantic_models):
+# FC SEGMENT PL.FC_SEGMENT_PL (default), FC LISCENCE REVENUE.FC_LICENSE_REVENUE (Q18, Q20), FC PRODUCT SKU.FC_PRODUCT_SKU (Q16, Q18, Q19). Guides: collectibles_forecast/guides.
+# Those models expose plain sums only, so variances, % changes, margins and bps must be computed by the agent; the
+# expected SQL reads the underlying views directly, whose columns match the models' fact / dimension names.
+# Routing rubrics (judge_thread) are warnOnly: they flag the wrong model without failing a correct final answer.
+cases:
+- id: q01-fy-revenue-ebitda-margin-vs-pfc
+  prompt: What is our FY26 revenue, EBITDA and EBITDA margin in the latest forecast, and how did they change versus the prior forecast?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer give FY26 revenue, Adj. EBITDA (incl. Emerging Services) and EBITDA margin % for the latest forecast, the change vs the prior forecast in $M (and margin change in bps), name both
+      the latest and prior forecast labels, and match the expected SQL figures within rounding?
+    expectedSql:
+      sql: |
+        SELECT version_label, pfc_version_label,
+               ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+               ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+               ROUND(100 * (SUM(net_revenue) - SUM(pfc_net_revenue)) / NULLIF(SUM(pfc_net_revenue), 0), 2) AS revenue_vs_pfc_pct,
+               ROUND(SUM(adj_ebitda), 2) AS adj_ebitda, ROUND(SUM(pfc_adj_ebitda), 2) AS pfc_adj_ebitda,
+               ROUND(SUM(adj_ebitda) - SUM(pfc_adj_ebitda), 2) AS ebitda_vs_pfc,
+               ROUND(100 * SUM(adj_ebitda) / NULLIF(SUM(net_revenue), 0), 2) AS ebitda_margin_pct,
+               ROUND(100 * SUM(pfc_adj_ebitda) / NULLIF(SUM(pfc_net_revenue), 0), 2) AS pfc_ebitda_margin_pct,
+               ROUND((SUM(adj_ebitda) / NULLIF(SUM(net_revenue), 0) - SUM(pfc_adj_ebitda) / NULLIF(SUM(pfc_net_revenue), 0)) * 10000, 2) AS ebitda_margin_bps_vs_pfc
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+        GROUP BY version_label, pfc_version_label
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q02-revenue-by-segment-vs-aug
+  prompt: Which segments drove the +3% increase in FY26 revenue versus the Aug forecast?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer compare FY26 revenue by revenue segment (North America net of eliminations) between the latest forecast and the Aug 2026 forecast (AUG26RF) directly - NOT via the prior-forecast
+      (pfc_*) columns unless Aug is the prior forecast - name both version labels, identify the biggest drivers with $M deltas matching the expected SQL within rounding, and state whether the total change
+      actually matches the quoted +3%?
+    expectedSql:
+      sql: |
+        SELECT revenue_segment,
+               MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+               MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)), 2) AS revenue,
+               ROUND(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS comparison_revenue,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS revenue_vs_comparison,
+               ROUND(100 * (SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)))
+                     / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0), 2) AS revenue_vs_comparison_pct
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026
+        GROUP BY revenue_segment
+        HAVING SUM(net_revenue) <> 0
+        ORDER BY revenue_vs_comparison DESC
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q03-ytd-actual-vs-forecast-by-segment
+  prompt: How much of FY26 revenue is already actual (YTD through Aug) versus still forecast, by segment?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer split FY26 latest-forecast revenue by revenue segment into actual (af_flag A) and still-forecast (af_flag F) $M amounts plus the share already actual, matching the expected SQL within
+      rounding, and state the month actuals actually run through in the latest forecast (saying so if it is not Aug)?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label, MAX(actuals_through_date) AS actuals_through_date, revenue_segment,
+               ROUND(SUM(IFF(af_flag = 'A', net_revenue, 0)), 2) AS actual_ytd_revenue,
+               ROUND(SUM(IFF(af_flag = 'F', net_revenue, 0)), 2) AS forecast_ytg_revenue,
+               ROUND(SUM(net_revenue), 2) AS fy_revenue,
+               ROUND(100 * SUM(IFF(af_flag = 'A', net_revenue, 0)) / NULLIF(SUM(net_revenue), 0), 2) AS pct_actual
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+        GROUP BY revenue_segment
+        HAVING SUM(net_revenue) <> 0
+        ORDER BY fy_revenue DESC
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q04-revenue-mix-by-quarter
+  prompt: How is our revenue mix across North America, International, Digital and Fanatics Collect changing quarter by quarter?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer show FY26 latest-forecast revenue ($M) and % share of the quarter's total for North America (net of eliminations), International, Digital and Fanatics Collect for each of Q1-Q4, mark
+      which quarters are actual vs forecast, describe how the mix shifts, and match the expected SQL within rounding?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label, fiscal_quarter, revenue_segment,
+               LISTAGG(DISTINCT af_flag, '/') WITHIN GROUP (ORDER BY af_flag) AS af_flags,
+               ROUND(SUM(net_revenue), 2) AS revenue,
+               ROUND(100 * SUM(net_revenue) / NULLIF(SUM(SUM(net_revenue)) OVER (PARTITION BY fiscal_quarter), 0), 2) AS pct_of_quarter
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+          AND revenue_segment IN ('North America', 'International', 'Digital', 'Fanatics Collect')
+        GROUP BY fiscal_quarter, revenue_segment
+        ORDER BY fiscal_quarter, MIN(segment_sort)
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q05-q4-outlook-vs-pfc
+  prompt: What is the Q4 outlook for revenue and EBITDA, and what changed since last month?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer give FY26 Q4 (Oct-Dec) revenue, Adj. EBITDA and EBITDA margin in the latest forecast, by month and in total, and the change vs the prior forecast ($M), naming both forecast labels,
+      with figures matching the expected SQL within rounding?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+               CASE WHEN GROUPING(month_number) = 1 THEN 'Q4 total' ELSE MAX(month_name) END AS period,
+               MAX(af_flag) AS af_flag,
+               ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+               ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+               ROUND(SUM(adj_ebitda), 2) AS adj_ebitda, ROUND(SUM(pfc_adj_ebitda), 2) AS pfc_adj_ebitda,
+               ROUND(SUM(adj_ebitda) - SUM(pfc_adj_ebitda), 2) AS ebitda_vs_pfc,
+               ROUND(100 * SUM(adj_ebitda) / NULLIF(SUM(net_revenue), 0), 2) AS ebitda_margin_pct
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND fiscal_quarter = 'Q4'
+        GROUP BY ROLLUP (month_number)
+        ORDER BY GROUPING(month_number), month_number
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q06-ebitda-walk-vs-aug-by-segment
+  prompt: EBITDA is up about $88M (+4%) versus Aug. Walk me through that by segment.
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer walk the FY26 Adj. EBITDA change between the latest forecast and the Aug 2026 forecast (AUG26RF) by segment (Eliminations its own row), attributing it to gross margin, marketing
+      and SG&A (cost increases shown as negative EBITDA impact), with $M figures matching the expected SQL within rounding, both version labels named, and a plain statement of whether the total matches the
+      quoted ~$88M / +4%?
+    expectedSql:
+      sql: |
+        SELECT segment,
+               MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+               MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+               ROUND(SUM(IFF(is_latest_fc, adj_ebitda, 0)), 2) AS adj_ebitda,
+               ROUND(SUM(IFF(version_code = 'AUG26RF', adj_ebitda, 0)), 2) AS comparison_adj_ebitda,
+               ROUND(SUM(IFF(is_latest_fc, adj_ebitda, 0)) - SUM(IFF(version_code = 'AUG26RF', adj_ebitda, 0)), 2) AS ebitda_vs_comparison,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS revenue_vs_comparison,
+               ROUND(SUM(IFF(is_latest_fc, gross_margin, 0)) - SUM(IFF(version_code = 'AUG26RF', gross_margin, 0)), 2) AS gross_margin_vs_comparison,
+               ROUND(-(SUM(IFF(is_latest_fc, marketing, 0)) - SUM(IFF(version_code = 'AUG26RF', marketing, 0))), 2) AS marketing_impact,
+               ROUND(-(SUM(IFF(is_latest_fc, other_sga, 0)) - SUM(IFF(version_code = 'AUG26RF', other_sga, 0))), 2) AS other_sga_impact
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026
+        GROUP BY segment
+        ORDER BY MIN(segment_sort)
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q07-gm-bps-vs-aug-international-gap
+  prompt: Total gross margin improved 57 bps, but International fell 317 bps. What explains the gap?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer compare FY26 gross margin % by segment and in total between the latest forecast and the Aug 2026 forecast in bps, explain the International movement with its COGS-line rate changes
+      (manufacturing, royalties, autos/relics, MG shortfall, other) and the revenue-mix effect on the total, match the expected SQL within rounding, and say plainly whether the quoted +57 / -317 bps still
+      hold for the latest forecast?
+    expectedSql:
+      sql: |
+        SELECT CASE WHEN GROUPING(segment) = 1 THEN 'Total' ELSE segment END AS segment_line,
+               MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+               MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)), 2) AS revenue,
+               ROUND(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS comparison_revenue,
+               ROUND(100 * SUM(IFF(is_latest_fc, gross_margin, 0)) / NULLIF(SUM(IFF(is_latest_fc, net_revenue, 0)), 0), 2) AS gm_pct,
+               ROUND(100 * SUM(IFF(version_code = 'AUG26RF', gross_margin, 0)) / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0), 2) AS comparison_gm_pct,
+               ROUND(10000 * (SUM(IFF(is_latest_fc, gross_margin, 0)) / NULLIF(SUM(IFF(is_latest_fc, net_revenue, 0)), 0)
+                            - SUM(IFF(version_code = 'AUG26RF', gross_margin, 0)) / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0)), 2) AS gm_bps_vs_comparison,
+               ROUND(-10000 * (SUM(IFF(is_latest_fc, manufacturing, 0)) / NULLIF(SUM(IFF(is_latest_fc, net_revenue, 0)), 0)
+                             - SUM(IFF(version_code = 'AUG26RF', manufacturing, 0)) / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0)), 2) AS manufacturing_bps_impact,
+               ROUND(-10000 * (SUM(IFF(is_latest_fc, royalties, 0)) / NULLIF(SUM(IFF(is_latest_fc, net_revenue, 0)), 0)
+                             - SUM(IFF(version_code = 'AUG26RF', royalties, 0)) / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0)), 2) AS royalties_bps_impact,
+               ROUND(-10000 * (SUM(IFF(is_latest_fc, autos_relics, 0)) / NULLIF(SUM(IFF(is_latest_fc, net_revenue, 0)), 0)
+                             - SUM(IFF(version_code = 'AUG26RF', autos_relics, 0)) / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0)), 2) AS autos_relics_bps_impact,
+               ROUND(-10000 * (SUM(IFF(is_latest_fc, mg_shortfall, 0)) / NULLIF(SUM(IFF(is_latest_fc, net_revenue, 0)), 0)
+                             - SUM(IFF(version_code = 'AUG26RF', mg_shortfall, 0)) / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0)), 2) AS mg_shortfall_bps_impact,
+               ROUND(-10000 * (SUM(IFF(is_latest_fc, net_freight + product_development + obsolescence + cogs_compensation, 0)) / NULLIF(SUM(IFF(is_latest_fc, net_revenue, 0)), 0)
+                             - SUM(IFF(version_code = 'AUG26RF', net_freight + product_development + obsolescence + cogs_compensation, 0))
+                               / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0)), 2) AS other_cogs_bps_impact
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026
+        GROUP BY ROLLUP (segment)
+        HAVING SUM(net_revenue) <> 0
+        ORDER BY GROUPING(segment), MIN(segment_sort)
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q08-monthly-revisions-vs-aug
+  prompt: Which months had the biggest revisions versus the Aug forecast (for example Oct −4%, Nov +10%, Dec −3%), and why?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer list FY26 revenue by month for the latest forecast vs the Aug 2026 forecast with $M and % revisions and A/F status, identify the largest revisions, explain them with quantified segment
+      / P&L-line drivers (noting narrative lives in the forecast deck), match the expected SQL within rounding, and say plainly whether the quoted Oct -4% / Nov +10% / Dec -3% match the latest forecast?
+    expectedSql:
+      sql: |
+        SELECT month_number, MAX(month_name) AS month_name,
+               MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+               MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+               MAX(IFF(is_latest_fc, af_flag, NULL)) AS af_flag,
+               MAX(IFF(version_code = 'AUG26RF', af_flag, NULL)) AS comparison_af_flag,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)), 2) AS revenue,
+               ROUND(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS comparison_revenue,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS revenue_vs_comparison,
+               ROUND(100 * (SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)))
+                     / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0), 2) AS revenue_vs_comparison_pct,
+               ROUND(SUM(IFF(is_latest_fc, adj_ebitda, 0)) - SUM(IFF(version_code = 'AUG26RF', adj_ebitda, 0)), 2) AS ebitda_vs_comparison
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026
+        GROUP BY month_number
+        ORDER BY month_number
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q09-required-rest-of-year-vs-run-rate
+  prompt: Given YTD actuals through Aug, what revenue do we need in Sep–Dec to hit the full-year forecast, and how does that compare with the Q1–Q3 run rate?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer, for the FY26 latest forecast, give YTD actual revenue and the month actuals run through, the revenue in Sep-Dec (and/or the remaining forecast months) needed to reach the full-year
+      forecast, and compare its monthly average with the Q1-Q3 monthly run rate, matching the expected SQL within rounding, and note it if actuals already run past Aug?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label, MAX(actuals_through_date) AS actuals_through_date,
+               ROUND(SUM(net_revenue), 2) AS fy_revenue,
+               ROUND(SUM(IFF(af_flag = 'A', net_revenue, 0)), 2) AS ytd_actual_revenue,
+               ROUND(SUM(IFF(month_number <= 8, net_revenue, 0)), 2) AS jan_aug_revenue,
+               ROUND(SUM(IFF(month_number BETWEEN 9 AND 12, net_revenue, 0)), 2) AS sep_dec_revenue,
+               ROUND(SUM(IFF(month_number BETWEEN 9 AND 12, net_revenue, 0)) / 4, 2) AS sep_dec_monthly_avg,
+               ROUND(SUM(IFF(af_flag = 'F', net_revenue, 0)), 2) AS remaining_forecast_revenue,
+               COUNT(DISTINCT IFF(af_flag = 'F', month_number, NULL)) AS remaining_forecast_months,
+               ROUND(SUM(IFF(af_flag = 'F', net_revenue, 0)) / NULLIF(COUNT(DISTINCT IFF(af_flag = 'F', month_number, NULL)), 0), 2) AS remaining_monthly_avg,
+               ROUND(SUM(IFF(month_number <= 9, net_revenue, 0)) / 9, 2) AS q1_q3_monthly_run_rate
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q10-implied-q4-ebitda-margin
+  prompt: What is the implied Q4 EBITDA margin compared with Q1–Q3?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer give the FY26 latest-forecast Adj. EBITDA margin % for Q4 and for Q1-Q3 combined (ratio of sums, incl. Emerging Services), with the underlying revenue and EBITDA and the difference
+      in bps, matching the expected SQL within rounding?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label,
+               ROUND(SUM(IFF(fiscal_quarter <> 'Q4', net_revenue, 0)), 2) AS q1_q3_revenue,
+               ROUND(SUM(IFF(fiscal_quarter <> 'Q4', adj_ebitda, 0)), 2) AS q1_q3_adj_ebitda,
+               ROUND(100 * SUM(IFF(fiscal_quarter <> 'Q4', adj_ebitda, 0)) / NULLIF(SUM(IFF(fiscal_quarter <> 'Q4', net_revenue, 0)), 0), 2) AS q1_q3_ebitda_margin_pct,
+               ROUND(SUM(IFF(fiscal_quarter = 'Q4', net_revenue, 0)), 2) AS q4_revenue,
+               ROUND(SUM(IFF(fiscal_quarter = 'Q4', adj_ebitda, 0)), 2) AS q4_adj_ebitda,
+               ROUND(100 * SUM(IFF(fiscal_quarter = 'Q4', adj_ebitda, 0)) / NULLIF(SUM(IFF(fiscal_quarter = 'Q4', net_revenue, 0)), 0), 2) AS q4_ebitda_margin_pct,
+               ROUND(10000 * (SUM(IFF(fiscal_quarter = 'Q4', adj_ebitda, 0)) / NULLIF(SUM(IFF(fiscal_quarter = 'Q4', net_revenue, 0)), 0)
+                            - SUM(IFF(fiscal_quarter <> 'Q4', adj_ebitda, 0)) / NULLIF(SUM(IFF(fiscal_quarter <> 'Q4', net_revenue, 0)), 0)), 2) AS q4_vs_q1_q3_bps
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q11-latest-vs-budget-by-segment
+  prompt: How does the current forecast compare to the 2026 budget for revenue and EBITDA by segment?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer compare the latest forecast to the 2026 budget for revenue and Adj. EBITDA by segment (EBITDA basis, Eliminations as its own row) and in total, with $M variances matching the expected
+      SQL within rounding and the forecast label stated?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label, segment,
+               ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(budget_net_revenue), 2) AS budget_revenue,
+               ROUND(SUM(net_revenue) - SUM(budget_net_revenue), 2) AS revenue_vs_budget,
+               ROUND(SUM(adj_ebitda), 2) AS adj_ebitda, ROUND(SUM(budget_adj_ebitda), 2) AS budget_adj_ebitda,
+               ROUND(SUM(adj_ebitda) - SUM(budget_adj_ebitda), 2) AS ebitda_vs_budget
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+        GROUP BY segment
+        ORDER BY MIN(segment_sort)
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q12-corporate-litigation-tcg-vs-aug
+  prompt: What are Corporate, Key Litigation and TCG costs for the year, and how did they change versus Aug?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer give FY26 costs (Adj. EBITDA impact and its COGS / marketing / SG&A make-up) for Corporate, Key Litigation and TCG in the latest forecast and the change vs the Aug 2026 forecast (AUG26RF,
+      compared directly), naming both version labels, with $M figures matching the expected SQL within rounding?
+    expectedSql:
+      sql: |
+        SELECT segment,
+               MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+               MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+               ROUND(SUM(IFF(is_latest_fc, cogs, 0)), 2) AS cogs,
+               ROUND(SUM(IFF(is_latest_fc, marketing, 0)), 2) AS marketing,
+               ROUND(SUM(IFF(is_latest_fc, other_sga, 0)), 2) AS other_sga,
+               ROUND(SUM(IFF(is_latest_fc, adj_ebitda, 0)), 2) AS adj_ebitda,
+               ROUND(SUM(IFF(version_code = 'AUG26RF', adj_ebitda, 0)), 2) AS comparison_adj_ebitda,
+               ROUND(SUM(IFF(is_latest_fc, adj_ebitda, 0)) - SUM(IFF(version_code = 'AUG26RF', adj_ebitda, 0)), 2) AS ebitda_vs_comparison
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026
+          AND segment IN ('Corporate', 'Key Litigation', 'TCG')
+        GROUP BY segment
+        ORDER BY MIN(segment_sort)
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q13-true-up-vs-reforecast-vs-aug
+  prompt: Of the change versus Aug, how much comes from closed months being trued up to actuals, and how much from changes to months still in forecast?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer split the FY26 revenue and Adj. EBITDA change between the latest forecast and the Aug 2026 forecast into months closed since Aug (forecast in Aug, actual now = true-up) and months
+      still forecast in both (re-forecast), naming the months in each bucket and both version labels, with $M amounts matching the expected SQL within rounding (not using the pfc_* / af_transition_vs_pfc
+      columns unless Aug is the prior forecast)?
+    expectedSql:
+      sql: |
+        WITH m AS (
+          SELECT month_number,
+                 MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+                 MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+                 MAX(IFF(is_latest_fc, af_flag, NULL)) AS af_now,
+                 MAX(IFF(version_code = 'AUG26RF', af_flag, NULL)) AS af_aug,
+                 SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)) AS revenue_delta,
+                 SUM(IFF(is_latest_fc, adj_ebitda, 0)) - SUM(IFF(version_code = 'AUG26RF', adj_ebitda, 0)) AS ebitda_delta
+          FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+          WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026
+          GROUP BY month_number)
+        SELECT CASE WHEN af_aug = 'A' AND af_now = 'A' THEN 'Actual in both'
+                    WHEN af_aug = 'F' AND af_now = 'A' THEN 'Closed since Aug FC (true-up)'
+                    ELSE 'Forecast in both (re-forecast)' END AS bucket,
+               MAX(version_label) AS version_label, MAX(comparison_version_label) AS comparison_version_label,
+               LISTAGG(month_number, ',') WITHIN GROUP (ORDER BY month_number) AS months,
+               ROUND(SUM(revenue_delta), 2) AS revenue_vs_comparison,
+               ROUND(SUM(ebitda_delta), 2) AS ebitda_vs_comparison
+        FROM m
+        GROUP BY 1
+        ORDER BY MIN(month_number)
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q14-largest-segment-month-change-vs-pfc
+  prompt: Which segment and month has the largest dollar and percent change versus the prior forecast?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer identify the FY26 segment-month with the largest absolute revenue $M change vs the prior forecast and the one with the largest % change (ignoring zero or negative bases), naming
+      both forecast labels, with values matching the expected SQL within rounding?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+               segment, month_number, MAX(month_name) AS month_name, MAX(af_flag) AS af_flag,
+               ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+               ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+               ROUND(IFF(SUM(pfc_net_revenue) > 0, 100 * (SUM(net_revenue) - SUM(pfc_net_revenue)) / SUM(pfc_net_revenue), NULL), 2) AS revenue_vs_pfc_pct,
+               RANK() OVER (ORDER BY ABS(SUM(net_revenue) - SUM(pfc_net_revenue)) DESC) AS dollar_rank,
+               RANK() OVER (ORDER BY ABS(IFF(SUM(pfc_net_revenue) > 0, (SUM(net_revenue) - SUM(pfc_net_revenue)) / SUM(pfc_net_revenue), NULL)) DESC NULLS LAST) AS pct_rank
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+        GROUP BY segment, month_number
+        QUALIFY dollar_rank <= 5 OR pct_rank <= 5
+        ORDER BY dollar_rank
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q15-segment-revenue-to-ebitda-walk
+  prompt: For a given segment, what is the walk from net revenue down to EBITDA (royalties, marketing, SG&A and so on)?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer either ask which segment or pick one (stating which), and give its FY26 latest-forecast walk from net revenue through each COGS line (manufacturing, royalties, autos/relics, product
+      development, freight, MG shortfall, obsolescence, COGS compensation), gross margin, marketing, contribution margin and SG&A to Adj. EBITDA, with figures for that segment matching the expected SQL within
+      rounding?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label, segment,
+               ROUND(SUM(net_revenue), 2) AS net_revenue,
+               ROUND(SUM(manufacturing), 2) AS manufacturing, ROUND(SUM(royalties), 2) AS royalties,
+               ROUND(SUM(autos_relics), 2) AS autos_relics, ROUND(SUM(product_development), 2) AS product_development,
+               ROUND(SUM(net_freight), 2) AS net_freight, ROUND(SUM(mg_shortfall), 2) AS mg_shortfall,
+               ROUND(SUM(obsolescence), 2) AS obsolescence, ROUND(SUM(cogs_compensation), 2) AS cogs_compensation,
+               ROUND(SUM(cogs), 2) AS total_cogs, ROUND(SUM(gross_margin), 2) AS gross_margin,
+               ROUND(SUM(marketing), 2) AS marketing, ROUND(SUM(contribution_margin), 2) AS contribution_margin,
+               ROUND(SUM(other_sga), 2) AS other_sga, ROUND(SUM(adj_ebitda), 2) AS adj_ebitda
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+        GROUP BY segment
+        ORDER BY MIN(segment_sort)
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q16-na-reconcile-to-sku
+  prompt: Does North America revenue on this dashboard reconcile to the SKU and channel forecast?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer compare FY26 North America revenue (segment P&L, net of eliminations) with the NA SKU-forecast total for the SAME forecast version (the latest cycle loaded in the SKU data), report
+      both and the difference, matching the expected SQL within rounding, and say so if the segment P&L's latest cycle is newer than the SKU data?
+    expectedSql:
+      sql: |
+        WITH v AS (SELECT DISTINCT version_code FROM ORACLE_DATA_PROD.SANDBOX.FC_PRODUCT_SKU_V WHERE is_latest_fc = TRUE),
+        pl AS (
+          SELECT version_code, MAX(version_label) AS version_label, MAX(latest_fc_label) AS pl_latest_fc_label, SUM(net_revenue) AS na_revenue
+          FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+          WHERE fiscal_year = 2026 AND revenue_segment = 'North America' AND version_code IN (SELECT version_code FROM v)
+          GROUP BY version_code),
+        sku AS (
+          SELECT version_code, SUM(net_revenue) AS sku_revenue
+          FROM ORACLE_DATA_PROD.SANDBOX.FC_PRODUCT_SKU_V
+          WHERE fiscal_year = 2026 AND version_code IN (SELECT version_code FROM v)
+          GROUP BY version_code)
+        SELECT pl.version_label, pl.pl_latest_fc_label,
+               ROUND(pl.na_revenue, 2) AS na_segment_revenue, ROUND(sku.sku_revenue, 2) AS na_sku_revenue,
+               ROUND(pl.na_revenue - sku.sku_revenue, 2) AS difference
+        FROM pl JOIN sku USING (version_code)
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+  - id: routes_to_right_model
+    type: judge_thread
+    warnOnly: true
+    criterion: Did the agent take North America revenue from the FC SEGMENT PL.FC_SEGMENT_PL model and the SKU total from the FC PRODUCT SKU.FC_PRODUCT_SKU model, for the same version_code?
+
+- id: q17-fy-forecast-trend-since-january
+  prompt: How has the FY26 revenue forecast moved across every monthly forecast since January?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer list FY26 revenue for every Monthly Forecast cycle from Jan 2026 FC through the latest, in chronological order, with the cycle-on-cycle change, values matching the expected SQL within
+      rounding, without summing across versions?
+    expectedSql:
+      sql: |
+        SELECT version_label, cycle_month,
+               ROUND(SUM(net_revenue), 2) AS fy_revenue,
+               ROUND(SUM(net_revenue) - LAG(SUM(net_revenue)) OVER (ORDER BY cycle_month), 2) AS change_vs_prior_cycle,
+               ROUND(SUM(adj_ebitda), 2) AS fy_adj_ebitda
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE version_type = 'Monthly Forecast' AND fiscal_year = 2026 AND cycle_month >= '2026-01-01'
+        GROUP BY version_label, cycle_month
+        ORDER BY cycle_month
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+- id: q18-digital-and-collect-drivers
+  prompt: Which channels, SKUs or product releases are driving the Digital revenue decline (−6%) and the Fanatics Collect change?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer state that channel / SKU / product-release detail exists only for North America (none for Digital or Fanatics Collect), and instead give the Digital change by license (license data)
+      and the Fanatics Collect change split Live vs Marketplace (segment P&L), each vs the Aug 2026 forecast, labelling each figure's version (the license data may be a cycle behind), with $M figures matching
+      the expected SQL within rounding, and say whether the quoted -6% Digital decline matches?
+    expectedSql:
+      sql: |
+        SELECT 'License revenue' AS source, segment, license AS driver,
+               MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+               MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)), 2) AS revenue,
+               ROUND(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS comparison_revenue,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS revenue_vs_comparison
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_LICENSE_REVENUE_V
+        WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026 AND segment = 'Digital'
+        GROUP BY segment, license
+        UNION ALL
+        SELECT 'Segment P&L', segment, sub_segment,
+               MAX(IFF(is_latest_fc, version_label, NULL)),
+               MAX(IFF(version_code = 'AUG26RF', version_label, NULL)),
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)), 2),
+               ROUND(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2),
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2)
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+        WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026 AND segment IN ('Digital', 'Fanatics Collect')
+        GROUP BY segment, sub_segment
+        ORDER BY source, segment, revenue_vs_comparison
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+  - id: routes_to_right_model
+    type: judge_thread
+    warnOnly: true
+    criterion: Did the agent use FC LISCENCE REVENUE.FC_LICENSE_REVENUE for the Digital license drivers and FC SEGMENT PL.FC_SEGMENT_PL for the Fanatics Collect Live vs Marketplace split, without searching FC PRODUCT SKU.FC_PRODUCT_SKU for Digital or Collect SKUs as if they existed?
+
+- id: q19-releases-vs-budget-na
+  prompt: Which product releases have the largest forecast-to-budget variance in North America?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer rank North America product releases (by COA and product name) by absolute forecast-minus-budget revenue variance ($M) for the latest SKU forecast (labelled) and FY26, with the top
+      entries and values matching the expected SQL within rounding?
+    expectedSql:
+      sql: |
+        SELECT MAX(version_label) AS version_label, coa, product_name, MIN(street_date) AS street_date, MIN(budget_street_date) AS budget_street_date,
+               ROUND(SUM(net_revenue), 2) AS fc_revenue, ROUND(SUM(budget_net_revenue), 2) AS budget_revenue,
+               ROUND(SUM(net_revenue) - SUM(budget_net_revenue), 2) AS revenue_vs_budget
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_PRODUCT_SKU_V
+        WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+        GROUP BY coa, product_name
+        ORDER BY ABS(SUM(net_revenue) - SUM(budget_net_revenue)) DESC
+        LIMIT 20
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+  - id: routes_to_right_model
+    type: judge_thread
+    warnOnly: true
+    criterion: Did the agent answer from the FC PRODUCT SKU.FC_PRODUCT_SKU model, grouping by coa and product_name and comparing net_revenue with budget_net_revenue?
+
+- id: q20-international-fx-hedge
+  prompt: How much of the International revenue and gross margin change is FX or hedging?
+  attempts: 1
+  rubrics:
+  - id: matches_verified_answer
+    type: judge_final_answer
+    criterion: Does the answer say FX translation impact is not available in the data (without estimating it), and quantify the hedge part of International revenue - hedge vs unhedged revenue and their change
+      vs the prior forecast in the license data, with version labels - matching the expected SQL within rounding, noting which cycle the license data is on?
+    expectedSql:
+      sql: |
+        SELECT segment,
+               MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+               MAX(IFF(is_prior_fc, version_label, NULL)) AS pfc_version_label,
+               ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)), 2) AS revenue,
+               ROUND(SUM(IFF(is_prior_fc, net_revenue, 0)), 2) AS pfc_revenue,
+               ROUND(SUM(IFF(is_latest_fc, hedge_revenue, 0)), 2) AS hedge,
+               ROUND(SUM(IFF(is_prior_fc, hedge_revenue, 0)), 2) AS pfc_hedge,
+               ROUND(SUM(IFF(is_latest_fc, hedge_revenue, 0)) - SUM(IFF(is_prior_fc, hedge_revenue, 0)), 2) AS hedge_vs_pfc,
+               ROUND(SUM(IFF(is_latest_fc, unhedged_net_revenue, 0)) - SUM(IFF(is_prior_fc, unhedged_net_revenue, 0)), 2) AS unhedged_revenue_vs_pfc
+        FROM ORACLE_DATA_PROD.SANDBOX.FC_LICENSE_REVENUE_V
+        WHERE (is_latest_fc = TRUE OR is_prior_fc = TRUE) AND fiscal_year = 2026 AND segment = 'International'
+        GROUP BY segment
+      dataConnectionId: 01a11848-a092-7729-a954-c8db37991b8b
+  - id: routes_to_right_model
+    type: judge_thread
+    warnOnly: true
+    criterion: Did the agent use FC LISCENCE REVENUE.FC_LICENSE_REVENUE for the hedge (hedge_revenue / unhedged_net_revenue), and FC SEGMENT PL.FC_SEGMENT_PL for any International gross margin figures, without estimating FX?

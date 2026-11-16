@@ -1,0 +1,370 @@
+type: model
+id: fc_product_sku
+name: FC North America SKU & Product Forecast
+description: |
+  North America (Topps Domestic physical cards) forecast at SKU x sales channel x month, with product-release
+  attributes (COA, product name, product-year, street dates) for every Monthly Forecast cycle loaded in the SKU
+  forecast history and the Budget.
+  Grain: one row per version_code x month (period_date) x sku x channel_desc. Amounts in USD millions ($M); volume in cases.
+  Each row also carries the prior forecast cycle (pfc_*) and Budget (budget_*) values for the same SKU, channel and month.
+  Perimeter: NORTH AMERICA ONLY. No International, Digital or Fanatics Collect SKUs exist. Totals tie to the segment
+  P&L North America revenue (net of eliminations) within ~$2M for the same cycle.
+  Always filter to exactly ONE version (version_code or is_latest_fc) and ONE fiscal_year per query; summing across
+  versions double counts.
+  is_latest_fc is the newest cycle loaded in THIS dataset (the SKU history; see latest_fc_label) and can lag the
+  segment P&L by a cycle.
+  Synonyms: SKU forecast, product forecast, release forecast, channel forecast
+base_sql_table: ORACLE_DATA_PROD.SANDBOX.FC_PRODUCT_SKU_V
+dimensions:
+  - id: row_key
+    type: string
+    unique: true
+    visibility: internal
+    expr_sql: VERSION_CODE || '|' || TO_VARCHAR(PERIOD_DATE) || '|' || SKU || '|' || CHANNEL_DESC
+    description: Grain key (version_code | period_date | sku | channel_desc).
+  - id: version_code
+    type: string
+    expr_sql: VERSION_CODE
+    name: Version code
+    description: |
+      Planning version code: '<MON><YY>RF' = Monthly Forecast for that cycle month, 'Plan_<year>' = Budget.
+      Synonyms: version, scenario, forecast cycle
+  - id: version_label
+    type: string
+    expr_sql: VERSION_LABEL
+    name: Version label
+    description: Display label, e.g. '<Mon> <YYYY> FC'. Return it with every version-based figure.
+  - id: pfc_version_code
+    type: string
+    expr_sql: PFC_VERSION_CODE
+    name: Prior forecast version code
+    description: |
+      Cycle immediately before this version among cycles loaded in the SKU history; the pfc_* facts hold its values.
+      Synonyms: prior forecast version
+  - id: pfc_version_label
+    type: string
+    expr_sql: PFC_VERSION_LABEL
+    name: Prior forecast version label
+    description: |
+      Display label of pfc_version_code. Return it whenever pfc_* measures are used.
+      Synonyms: prior forecast name
+  - id: latest_fc_label
+    type: string
+    expr_sql: LATEST_FC_LABEL
+    name: Latest forecast label
+    description: |
+      Label of the newest Monthly Forecast loaded in the SKU history (same value on every row).
+      Synonyms: latest forecast name
+  - id: version_type
+    type: string
+    expr_sql: VERSION_TYPE
+    name: Version type
+    description: |
+      Kind of version.
+      Values: Budget, Monthly Forecast
+  - id: is_latest_fc
+    type: boolean
+    expr_sql: IS_LATEST_FC
+    name: Is latest forecast
+    description: |
+      TRUE for the newest Monthly Forecast loaded in the SKU history (may be older than the segment P&L's latest).
+      Synonyms: latest forecast, current forecast
+  - id: is_prior_fc
+    type: boolean
+    expr_sql: IS_PRIOR_FC
+    name: Is prior forecast
+    description: |
+      TRUE for the cycle immediately before is_latest_fc among cycles loaded in the SKU history.
+      Synonyms: prior forecast, previous forecast
+  - id: fiscal_year
+    type: number
+    expr_sql: FISCAL_YEAR
+    name: Fiscal year
+    description: |
+      Fiscal (= calendar) year of the revenue month. NOT the product-year in the product name.
+      Synonyms: FY, year
+  - id: fiscal_quarter
+    type: string
+    expr_sql: FISCAL_QUARTER
+    name: Fiscal quarter
+    description: |
+      Q1-Q4 of the revenue month.
+      Values: Q1, Q2, Q3, Q4
+      Synonyms: quarter
+  - id: month_number
+    type: number
+    expr_sql: MONTH_NUMBER
+    name: Month number
+    description: |
+      Revenue month 1-12.
+      Synonyms: month
+  - id: af_flag
+    type: string
+    expr_sql: AF_FLAG
+    name: Actual / forecast flag
+    description: |
+      'A' closed month, 'F' forecast month, 'Plan' budget.
+      Values: A, F, Plan
+      Synonyms: actual or forecast
+  - id: sku
+    type: string
+    expr_sql: SKU
+    name: SKU
+    description: |
+      Oracle item / SKU code (e.g. FGC005993-CSE).
+      Synonyms: item, item number, SKU code
+  - id: channel_desc
+    type: string
+    expr_sql: CHANNEL_DESC
+    name: Channel
+    description: |
+      Sales channel detail.
+      Values: Hobby Shop, Hobby Distributor, Hobby D2C Distributor, Breaker, Topps.com, Fanatics.com, Amazon.Com,
+      Retail Direct, Retail Distributor - MJH, Retail Distributor - Excell, Internal - Other (not exhaustive)
+      Synonyms: channel, sales channel, customer channel
+  - id: channel_group
+    type: string
+    expr_sql: CHANNEL_GROUP
+    name: Channel group
+    description: |
+      Grouped channel; use for channel summaries.
+      Values: Hobby & Breakers, Retail, eCommerce / DTC, Internal / Intercompany, Planning input / unassigned, Other
+      Synonyms: channel group, channel type, wholesale vs DTC
+  - id: coa
+    type: string
+    expr_sql: COA
+    name: COA
+    description: |
+      Product (release) identifier. Lettered COAs like NFL2502 are named product releases.
+      Synonyms: product code, product id, title code, COA
+  - id: product_name
+    type: string
+    expr_sql: PRODUCT_NAME
+    name: Product name
+    description: |
+      Product release name, e.g. '2026 Topps Series 1 Baseball'. The year in the name is the PRODUCT-YEAR, not the
+      release date (a '2025' product can street in 2026). Similar names are distinct products; group with coa.
+      Synonyms: product, release, product release, set, title
+  - id: product_year
+    type: string
+    expr_sql: PRODUCT_YEAR
+    name: Product year
+    description: |
+      Year prefix parsed from the product name (e.g. '2025' or '2025/26'). Not the street date or fiscal_year.
+      Synonyms: product year, season
+  - id: is_release_coa
+    type: boolean
+    expr_sql: IS_RELEASE_COA
+    name: Is product release COA
+    description: |
+      TRUE when the COA is a lettered product release (vs general / Topps NOW / hedge buckets).
+      Synonyms: is product release
+  - id: street_year
+    type: number
+    expr_sql: STREET_YEAR
+    name: Street year
+    description: Calendar year of the street date in this version.
+  - id: street_date_move_vs_pfc
+    type: string
+    expr_sql: STREET_DATE_MOVE_VS_PFC
+    name: Street date move vs PFC
+    description: |
+      Street date in this version vs the prior forecast.
+      Values: SD Accelerated, SD Delayed, No change
+      Synonyms: street date move, SD delayed, SD accelerated, timing shift
+  - id: period_date
+    type: date
+    expr_sql: PERIOD_DATE
+    name: Period date
+    description: First day of the revenue month.
+  - id: street_date
+    type: date
+    expr_sql: STREET_DATE
+    name: Street date
+    description: |
+      Product street (release) date in this forecast version.
+      Synonyms: release date, launch date, SD, ship date
+  - id: pfc_street_date
+    type: date
+    expr_sql: PFC_STREET_DATE
+    name: Prior forecast street date
+    description: |
+      Street date in the prior forecast cycle.
+      Synonyms: prior street date
+  - id: budget_street_date
+    type: date
+    expr_sql: BUDGET_STREET_DATE
+    name: Budget street date
+    description: Street date in the Budget.
+  - id: net_revenue
+    type: number
+    visibility: internal
+    expr_sql: NET_REVENUE
+    name: Net revenue
+    description: |
+      Net revenue excl. intercompany ($M).
+      Synonyms: revenue, sales
+  - id: contribution_margin
+    type: number
+    visibility: internal
+    expr_sql: CONTRIBUTION_MARGIN
+    name: Contribution margin
+    description: |
+      Contribution margin from the SKU planning model ($M).
+      Synonyms: CM
+  - id: volume_cases
+    type: number
+    visibility: internal
+    expr_sql: VOLUME_CASES
+    name: Volume (cases)
+    description: |
+      Volume in cases.
+      Synonyms: cases, units, volume
+  - id: pfc_net_revenue
+    type: number
+    visibility: internal
+    expr_sql: PFC_NET_REVENUE
+    name: PFC net revenue
+    description: |
+      Prior forecast cycle (pfc_version_label) net revenue for the same SKU/channel/month ($M). Only for 'prior forecast' comparisons.
+      Synonyms: prior forecast revenue
+  - id: pfc_contribution_margin
+    type: number
+    visibility: internal
+    expr_sql: PFC_CONTRIBUTION_MARGIN
+    name: PFC contribution margin
+    description: Prior forecast CM ($M).
+  - id: pfc_volume_cases
+    type: number
+    visibility: internal
+    expr_sql: PFC_VOLUME_CASES
+    name: PFC volume (cases)
+    description: Prior forecast volume (cases).
+  - id: budget_net_revenue
+    type: number
+    visibility: internal
+    expr_sql: BUDGET_NET_REVENUE
+    name: Budget net revenue
+    description: |
+      Budget (Plan_<fiscal_year>) net revenue for the same SKU/channel/month ($M).
+      Synonyms: budget revenue, plan revenue
+  - id: budget_contribution_margin
+    type: number
+    visibility: internal
+    expr_sql: BUDGET_CONTRIBUTION_MARGIN
+    name: Budget contribution margin
+    description: |
+      Budget CM ($M).
+      Synonyms: budget CM
+  - id: budget_volume_cases
+    type: number
+    visibility: internal
+    expr_sql: BUDGET_VOLUME_CASES
+    name: Budget volume (cases)
+    description: Budget volume (cases).
+measures:
+  - id: total_sku_revenue
+    func: sum
+    of: net_revenue
+    name: SKU revenue
+    description: |
+      SUM of net_revenue ($M). Filter to one version and one fiscal_year.
+      Synonyms: revenue, sales, NA revenue
+  - id: total_sku_pfc_revenue
+    func: sum
+    of: pfc_net_revenue
+    name: PFC revenue
+    description: |
+      SUM of pfc_net_revenue ($M), prior forecast cycle for the same rows. Return pfc_version_label with it.
+      Synonyms: prior forecast revenue
+  - id: total_sku_budget_revenue
+    func: sum
+    of: budget_net_revenue
+    name: Budget revenue
+    description: |
+      SUM of budget_net_revenue ($M).
+      Synonyms: budget revenue, plan revenue
+  - id: total_sku_cm
+    func: sum
+    of: contribution_margin
+    name: Contribution margin
+    description: |
+      SUM of contribution_margin ($M).
+      Synonyms: CM
+  - id: total_sku_pfc_cm
+    func: sum
+    of: pfc_contribution_margin
+    name: PFC contribution margin
+    description: SUM of pfc_contribution_margin ($M).
+  - id: total_sku_budget_cm
+    func: sum
+    of: budget_contribution_margin
+    name: Budget contribution margin
+    description: |
+      SUM of budget_contribution_margin ($M).
+      Synonyms: budget CM
+  - id: total_volume_cases
+    func: sum
+    of: volume_cases
+    name: Volume (cases)
+    description: |
+      SUM of volume_cases (cases).
+      Synonyms: cases, units, volume
+  - id: total_pfc_volume_cases
+    func: sum
+    of: pfc_volume_cases
+    name: PFC volume (cases)
+    description: SUM of pfc_volume_cases (cases).
+  - id: total_budget_volume_cases
+    func: sum
+    of: budget_volume_cases
+    name: Budget volume (cases)
+    description: SUM of budget_volume_cases (cases).
+  - id: sku_revenue_vs_pfc
+    func_sql: ${total_sku_revenue} - ${total_sku_pfc_revenue}
+    name: Revenue vs PFC
+    description: |
+      Net revenue minus prior forecast net revenue ($M) for the same rows.
+      Synonyms: change vs prior forecast, since last month, revenue variance vs PFC
+  - id: sku_revenue_vs_budget
+    func_sql: ${total_sku_revenue} - ${total_sku_budget_revenue}
+    name: Revenue vs budget
+    description: |
+      Net revenue minus budget net revenue ($M).
+      Synonyms: variance to budget, vs plan, forecast-to-budget variance
+  - id: sku_cm_vs_pfc
+    func_sql: ${total_sku_cm} - ${total_sku_pfc_cm}
+    name: CM vs PFC
+    description: Contribution margin minus prior forecast CM ($M).
+  - id: sku_cm_vs_budget
+    func_sql: ${total_sku_cm} - ${total_sku_budget_cm}
+    name: CM vs budget
+    description: Contribution margin minus budget CM ($M).
+  - id: volume_cases_vs_pfc
+    func_sql: ${total_volume_cases} - ${total_pfc_volume_cases}
+    name: Volume vs PFC
+    description: Volume minus prior forecast volume (cases).
+  - id: volume_cases_vs_budget
+    func_sql: ${total_volume_cases} - ${total_budget_volume_cases}
+    name: Volume vs budget
+    description: Volume minus budget volume (cases).
+  - id: sku_revenue_vs_pfc_pct
+    func_sql: 100 * (${total_sku_revenue} - ${total_sku_pfc_revenue}) / NULLIF(${total_sku_pfc_revenue}, 0)
+    name: Revenue growth vs PFC %
+    description: |
+      Percent change in net revenue vs the prior forecast (x100; NULL when PFC revenue is 0).
+      Synonyms: growth vs prior forecast, % change vs PFC
+  - id: sku_count
+    func: count_distinct
+    of: sku
+    name: SKU count
+    description: |
+      Distinct SKUs.
+      Synonyms: number of SKUs
+  - id: release_count
+    func: count_distinct
+    of: coa
+    name: Release count
+    description: |
+      Distinct COAs. Includes general / Topps NOW / hedge buckets; filter is_release_coa = TRUE to count named product releases only.
+      Synonyms: number of releases, number of products

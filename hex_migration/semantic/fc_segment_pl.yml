@@ -1,0 +1,1338 @@
+type: model
+id: fc_segment_pl
+name: FC Segment P&L
+description: |-
+  Fanatics Collectibles management P&L (Revenue -> Gross Margin -> Contribution Margin -> Adj. EBITDA) by forecast version, fiscal month and management segment, for Actual, Budget (Plan_<year>) and every Monthly Forecast cycle (<MON><YY>RF). Reproduces the Monthly Forecast deck.
+  Grain: one row per version_code x fiscal month (period_date) x leaf sub_segment. All amounts are USD millions ($M); fiscal year = calendar year. Each row also carries prior forecast (pfc_*), Budget (budget_*) and prior-year actual (py_*) values for the same month and segment, so variances need no joins.
+  CRITICAL: filter to exactly ONE version (or compare versions explicitly by grouping/pivoting on version_label) and to ONE fiscal_year; forecasts include preliminary next-year months. Which cycle is latest is data-driven (is_latest_fc); never assume a month. Totals are SUM over segments; there are no total rows.
+base_sql_table: ORACLE_DATA_PROD.SANDBOX.FC_SEGMENT_PL_V
+dimensions:
+- id: row_key
+  type: string
+  unique: true
+  visibility: internal
+  expr_sql: VERSION_CODE || '|' || TO_VARCHAR(PERIOD_DATE) || '|' || SUB_SEGMENT
+  description: 'Row grain key: version_code | period_date | sub_segment. Verified unique.'
+- id: version_code
+  type: string
+  expr_sql: VERSION_CODE
+  description: |-
+    Planning version code. 'Actual' = booked actuals; 'Plan_<year>' = that year's Budget; '<MON><YY>RF' = Monthly Forecast for that cycle month (e.g. <MON><YY>RF = the <Mon> 20<YY> Forecast). Always filter to one, except when comparing versions explicitly (group or pivot by version_label). Which cycle is latest is data-driven: use is_latest_fc, never assume a month.
+    Values: Actual, Plan_<year>, <MON><YY>RF.
+    Synonyms: version, scenario, forecast version, forecast cycle, cycle
+- id: version_label
+  type: string
+  expr_sql: VERSION_LABEL
+  description: |-
+    Display label, e.g. '<Mon> <YYYY> FC', 'Budget <YYYY>', 'Actual'. Return it with every version-based figure.
+    Synonyms: forecast name, FC name
+- id: version_type
+  type: string
+  expr_sql: VERSION_TYPE
+  description: |-
+    Actual / Budget / Monthly Forecast.
+    Values: Actual, Budget, Monthly Forecast.
+    Synonyms: scenario type
+- id: pfc_version_code
+  type: string
+  expr_sql: PFC_VERSION_CODE
+  description: |-
+    Version code of the cycle immediately before this Monthly Forecast (e.g. <MON><YY>RF -> the prior month's <MON><YY>RF). The pfc_* columns hold its values. Use pfc_* ONLY for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle.
+    Synonyms: prior forecast version, PFC version, prior FC
+- id: pfc_version_label
+  type: string
+  expr_sql: PFC_VERSION_LABEL
+  description: |-
+    Display label of the prior forecast cycle (the cycle the pfc_* facts come from).
+    Synonyms: prior forecast name
+- id: latest_fc_label
+  type: string
+  expr_sql: LATEST_FC_LABEL
+  description: |-
+    Label of the newest loaded Monthly Forecast in this dataset (same value on every row).
+    Synonyms: latest forecast name, current forecast label
+- id: is_latest_fc
+  type: boolean
+  expr_sql: IS_LATEST_FC
+  description: |-
+    TRUE only for the most recent Monthly Forecast cycle. Use for 'latest forecast' questions.
+    Synonyms: latest forecast, current forecast, most recent forecast, this forecast
+- id: is_prior_fc
+  type: boolean
+  expr_sql: IS_PRIOR_FC
+  description: |-
+    TRUE only for the Monthly Forecast immediately before the latest one.
+    Synonyms: previous forecast, last month's forecast
+- id: fiscal_year
+  type: number
+  expr_sql: FISCAL_YEAR
+  description: |-
+    Fiscal year (= calendar year), e.g. 2026. FY26 = 2026.
+    Synonyms: FY, year
+- id: fiscal_quarter
+  type: string
+  expr_sql: FISCAL_QUARTER
+  description: |-
+    Q1 (Jan-Mar), Q2 (Apr-Jun), Q3 (Jul-Sep), Q4 (Oct-Dec).
+    Values: Q1, Q2, Q3, Q4.
+    Synonyms: quarter, qtr
+- id: fiscal_half
+  type: string
+  expr_sql: FISCAL_HALF
+  description: |-
+    H1 (Jan-Jun) or H2 (Jul-Dec).
+    Values: H1, H2.
+    Synonyms: half, H1, H2
+- id: month_number
+  type: number
+  expr_sql: MONTH_NUMBER
+  description: |-
+    Calendar month number 1-12.
+    Synonyms: month number
+- id: month_name
+  type: string
+  expr_sql: MONTH_NAME
+  description: |-
+    Three-letter month, e.g. JAN, SEP. Order by month_number.
+    Values: JAN, FEB, MAR, APR, MAY, JUN, JUL, AUG, SEP, OCT, NOV, DEC.
+    Synonyms: month
+- id: af_flag
+  type: string
+  expr_sql: AF_FLAG
+  description: |-
+    'A' if the month is on or before the version's actuals-through date (booked actual inside the forecast), 'F' if still forecast, 'Plan' for Budget. A total spanning A and F months is Forecast.
+    Values: A, F, Plan.
+    Synonyms: actual or forecast, A/F, actualized, closed month, is actual
+- id: af_transition_vs_pfc
+  type: string
+  expr_sql: AF_TRANSITION_VS_PFC
+  description: |-
+    For Monthly Forecasts: 'Actual in both' (closed before the PFC), 'Closed since PFC' (forecast in the PFC, now actual -> change is a true-up to actuals), 'Forecast in both' (change is a re-forecast).
+    Values: Actual in both, Closed since PFC, Forecast in both.
+    Synonyms: true-up, closed since prior forecast, actualized since PFC
+- id: sub_segment
+  type: string
+  expr_sql: SUB_SEGMENT
+  description: |-
+    Leaf management unit. North America = Topps Domestic + GCP Manufacturing + GCP Intercompany Eliminations; International = Topps International + International Intercompany Eliminations; Fanatics Collect = Fanatics Live (incl. Instant Rips) + Marketplace.
+    Values: Topps Domestic, GCP Manufacturing, GCP Intercompany Eliminations, Topps International, International Intercompany Eliminations, Topps Eliminations, Digital, Corporate OH, Fanatics Live (incl. Instant Rips), Marketplace, Key Litigation, TCG.
+    Synonyms: sub-segment, business unit, LOB, line of business
+- id: segment
+  type: string
+  expr_sql: SEGMENT
+  description: |-
+    Deck segment for EBITDA / cost exhibits (Eliminations shown as its own row). Use for EBITDA, SG&A, gross-margin-by-segment and margin questions. 'North America' here EXCLUDES Topps Eliminations.
+    Values: North America, International, Eliminations, Digital, Corporate, Fanatics Collect, Key Litigation, TCG.
+    Synonyms: management segment, division, EBITDA segment
+- id: revenue_segment
+  type: string
+  expr_sql: REVENUE_SEGMENT
+  description: |-
+    Deck segment for REVENUE exhibits: North America is shown net of eliminations (Topps Eliminations folded into North America). Use for any revenue-by-segment or revenue-mix question.
+    Values: North America, International, Digital, Fanatics Collect, Corporate, Key Litigation, TCG.
+    Synonyms: revenue segment, sales segment
+- id: weekly_segment
+  type: string
+  expr_sql: WEEKLY_SEGMENT
+  description: |-
+    Weekly Finance Update grouping; Other = Corporate + Key Litigation + TCG; North America net of eliminations.
+    Values: North America, International, Digital, Fanatics Collect, Other.
+    Synonyms: weekly segment
+- id: segment_group
+  type: string
+  expr_sql: SEGMENT_GROUP
+  description: |-
+    'Total Physical Cards' = North America + International + Eliminations. Others: Digital, Corporate, Emerging Services (Fanatics Collect, Key Litigation, TCG).
+    Values: Total Physical Cards, Digital, Corporate, Emerging Services.
+    Synonyms: segment group, physical cards
+- id: is_emerging_services
+  type: boolean
+  expr_sql: IS_EMERGING_SERVICES
+  description: |-
+    TRUE for Emerging Services (Fanatics Collect, Key Litigation, TCG). 'Total ex-Emerging Services' = is_emerging_services = FALSE.
+    Synonyms: ES, emerging services, excl. ES, ex-ES
+- id: gaap_business_unit
+  type: string
+  expr_sql: GAAP_BUSINESS_UNIT
+  description: |-
+    GAAP Financial Statement package business unit label for the sub-segment.
+    Synonyms: GAAP BU, business unit (GAAP)
+- id: segment_sort
+  type: number
+  expr_sql: SEGMENT_SORT
+  visibility: internal
+  description: Deck display order of the sub-segment; ORDER BY MIN(segment_sort) to list segments in deck order.
+- id: bu_page
+  type: string
+  expr_sql: BU_PAGE
+  description: |-
+    Drillable P&L BU drill-down page: North America (Topps Domestic + GCP Manufacturing + GCP Intercompany Eliminations, PLUS Topps Eliminations in Net Sales only), International, Digital, Fanatics Collect. NULL for Corporate, Key Litigation and TCG (no BU page). Under a bu_page filter, SUM(net_revenue) is the page's Net Sales (for North America it INCLUDES Topps Eliminations) while every bu_* fact excludes Topps Eliminations -- so NA BU Net Sales = revenue_segment North America, and NA BU EBITDA = segment North America.
+    Values: North America, International, Digital, Fanatics Collect.
+    Synonyms: BU, BU page, BU P&L, business unit P&L, drill-down, drillable P&L
+- id: bu_detail
+  type: string
+  expr_sql: BU_DETAIL
+  description: |-
+    Line block within a BU page. North America splits into 'NASE' (Topps Domestic, LB_302, plus Topps Eliminations in Net Sales only) and 'GCP' (GCP Manufacturing + GCP Intercompany Eliminations, the card printer; its revenue nets to about zero, so never report a GCP % or margin). Other pages: = bu_page.
+    Values: NASE, GCP, International, Digital, Fanatics Collect.
+    Synonyms: BU line, NASE or GCP, North America excl GCP
+- id: in_bu_basis
+  type: boolean
+  expr_sql: IN_BU_BASIS
+  visibility: internal
+  description: |-
+    TRUE if the row counts in BU COGS / gross margin / marketing / SG&A / EBITDA. FALSE only for Topps Eliminations (North America page Net Sales only). NULL for sub-segments with no BU page. The bu_* facts already apply it; do not filter on it when computing BU Net Sales.
+    Synonyms: BU basis
+- id: period_date
+  type: date
+  expr_sql: PERIOD_DATE
+  description: |-
+    First day of the fiscal month.
+    Synonyms: month start, period, date
+- id: cycle_month
+  type: date
+  expr_sql: CYCLE_MONTH
+  description: |-
+    Month the Monthly Forecast was prepared for (<MON><YY>RF -> first day of that month). Use to order forecast versions chronologically.
+    Synonyms: forecast cycle month, forecast date
+- id: actuals_through_date
+  type: date
+  expr_sql: ACTUALS_THROUGH_DATE
+  description: |-
+    Last day of the last closed (actual) month inside this version (for a <MON><YY>RF cycle: the last day of the month before the cycle month).
+    Synonyms: actuals through, as of
+- id: net_revenue
+  type: number
+  visibility: internal
+  expr_sql: NET_REVENUE
+  description: |-
+    Net revenue ($M).
+    Synonyms: revenue, net sales, sales, top line
+- id: manufacturing
+  type: number
+  visibility: internal
+  expr_sql: MANUFACTURING
+  description: |-
+    Manufacturing costs in COGS ($M).
+    Synonyms: manufacturing cost, production cost
+- id: royalties
+  type: number
+  visibility: internal
+  expr_sql: ROYALTIES
+  description: |-
+    Royalties paid to licensors, in COGS ($M).
+    Synonyms: royalty, license fees
+- id: autos_relics
+  type: number
+  visibility: internal
+  expr_sql: AUTOS_RELICS
+  description: |-
+    Autograph & Relic costs, in COGS ($M).
+    Synonyms: autograph and relic, A&R, autos
+- id: product_development
+  type: number
+  visibility: internal
+  expr_sql: PRODUCT_DEVELOPMENT
+  description: |-
+    Product development / other product costs, in COGS ($M).
+    Synonyms: other product costs, product dev, photography, creative
+- id: net_freight
+  type: number
+  visibility: internal
+  expr_sql: NET_FREIGHT
+  description: |-
+    Net freight expense, in COGS ($M).
+    Synonyms: freight, shipping
+- id: mg_shortfall
+  type: number
+  visibility: internal
+  expr_sql: MG_SHORTFALL
+  description: |-
+    Minimum-guarantee royalty shortfall, in COGS ($M).
+    Synonyms: minimum guarantee shortfall, MG
+- id: obsolescence
+  type: number
+  visibility: internal
+  expr_sql: OBSOLESCENCE
+  description: |-
+    Inventory obsolescence, in COGS ($M).
+    Synonyms: inventory obsolescence, write-down
+- id: cogs_compensation
+  type: number
+  visibility: internal
+  expr_sql: COGS_COMPENSATION
+  description: |-
+    Compensation charged to COGS (mostly GCP labor) ($M).
+    Synonyms: COGS labor, manufacturing labor
+- id: cogs
+  type: number
+  visibility: internal
+  expr_sql: COGS
+  description: |-
+    Total COGS = manufacturing + royalties + autos_relics + product_development + net_freight + mg_shortfall + obsolescence + cogs_compensation ($M).
+    Synonyms: cost of goods sold, cost of sales, product costs
+- id: gross_margin
+  type: number
+  visibility: internal
+  expr_sql: GROSS_MARGIN
+  description: |-
+    Gross margin = net_revenue - cogs ($M).
+    Synonyms: GM, gross profit
+- id: marketing
+  type: number
+  visibility: internal
+  expr_sql: MARKETING
+  description: |-
+    Marketing / advertising ($M); sits above contribution margin.
+    Synonyms: advertising, marketing spend
+- id: contribution_margin
+  type: number
+  visibility: internal
+  expr_sql: CONTRIBUTION_MARGIN
+  description: |-
+    Contribution margin = gross_margin - marketing ($M).
+    Synonyms: CM
+- id: other_sga
+  type: number
+  visibility: internal
+  expr_sql: OTHER_SGA
+  description: |-
+    SG&A excluding marketing (salaries, bonus, professional services, legal, allocations, etc.) ($M). For Key Litigation this is the litigation cost.
+    Synonyms: SG&A excl marketing, operating expenses, opex, overhead
+- id: sga_total
+  type: number
+  visibility: internal
+  expr_sql: SGA_TOTAL
+  description: |-
+    Total SG&A including marketing and key litigation = marketing + other_sga ($M). Deck SG&A Total.
+    Synonyms: total SG&A, SG&A incl marketing
+- id: adj_ebitda
+  type: number
+  visibility: internal
+  expr_sql: ADJ_EBITDA
+  description: |-
+    Adjusted EBITDA = contribution_margin - other_sga ($M). Total across all segments = Adj. EBITDA incl. Emerging Services (default 'EBITDA').
+    Synonyms: EBITDA, adjusted EBITDA, AEBITDA, profit
+- id: pfc_net_revenue
+  type: number
+  visibility: internal
+  expr_sql: PFC_NET_REVENUE
+  description: |-
+    Net revenue in the cycle immediately before this version (pfc_version_label) for the same month/segment ($M). Not for named-cycle comparisons.
+    Synonyms: prior forecast revenue, PFC revenue, last month's forecast revenue
+- id: pfc_manufacturing
+  type: number
+  visibility: internal
+  expr_sql: PFC_MANUFACTURING
+  description: PFC manufacturing ($M).
+- id: pfc_royalties
+  type: number
+  visibility: internal
+  expr_sql: PFC_ROYALTIES
+  description: PFC royalties ($M).
+- id: pfc_autos_relics
+  type: number
+  visibility: internal
+  expr_sql: PFC_AUTOS_RELICS
+  description: PFC autograph & relic costs ($M).
+- id: pfc_product_development
+  type: number
+  visibility: internal
+  expr_sql: PFC_PRODUCT_DEVELOPMENT
+  description: PFC product development ($M).
+- id: pfc_net_freight
+  type: number
+  visibility: internal
+  expr_sql: PFC_NET_FREIGHT
+  description: PFC net freight ($M).
+- id: pfc_cogs_compensation
+  type: number
+  visibility: internal
+  expr_sql: PFC_COGS_COMPENSATION
+  description: PFC COGS compensation ($M).
+- id: pfc_cogs
+  type: number
+  visibility: internal
+  expr_sql: PFC_COGS
+  description: PFC total COGS ($M).
+- id: pfc_gross_margin
+  type: number
+  visibility: internal
+  expr_sql: PFC_GROSS_MARGIN
+  description: |-
+    PFC gross margin ($M).
+    Synonyms: prior forecast gross margin
+- id: pfc_marketing
+  type: number
+  visibility: internal
+  expr_sql: PFC_MARKETING
+  description: PFC marketing ($M).
+- id: pfc_contribution_margin
+  type: number
+  visibility: internal
+  expr_sql: PFC_CONTRIBUTION_MARGIN
+  description: PFC contribution margin ($M).
+- id: pfc_other_sga
+  type: number
+  visibility: internal
+  expr_sql: PFC_OTHER_SGA
+  description: PFC SG&A excl. marketing ($M).
+- id: pfc_adj_ebitda
+  type: number
+  visibility: internal
+  expr_sql: PFC_ADJ_EBITDA
+  description: |-
+    PFC Adj. EBITDA ($M).
+    Synonyms: prior forecast EBITDA, PFC EBITDA
+- id: budget_net_revenue
+  type: number
+  visibility: internal
+  expr_sql: BUDGET_NET_REVENUE
+  description: |-
+    Budget (Plan_<fiscal_year>) net revenue for the same month/segment ($M). Zero where no budget exists (FY27+).
+    Synonyms: budget revenue, plan revenue
+- id: budget_gross_margin
+  type: number
+  visibility: internal
+  expr_sql: BUDGET_GROSS_MARGIN
+  description: |-
+    Budget gross margin ($M).
+    Synonyms: budget GM
+- id: budget_marketing
+  type: number
+  visibility: internal
+  expr_sql: BUDGET_MARKETING
+  description: Budget marketing ($M).
+- id: budget_contribution_margin
+  type: number
+  visibility: internal
+  expr_sql: BUDGET_CONTRIBUTION_MARGIN
+  description: |-
+    Budget contribution margin ($M).
+    Synonyms: budget CM
+- id: budget_other_sga
+  type: number
+  visibility: internal
+  expr_sql: BUDGET_OTHER_SGA
+  description: Budget SG&A excl. marketing ($M).
+- id: budget_adj_ebitda
+  type: number
+  visibility: internal
+  expr_sql: BUDGET_ADJ_EBITDA
+  description: |-
+    Budget Adj. EBITDA ($M).
+    Synonyms: budget EBITDA, plan EBITDA
+- id: py_net_revenue
+  type: number
+  visibility: internal
+  expr_sql: PY_NET_REVENUE
+  description: |-
+    Prior-year ACTUAL net revenue for the same month/segment ($M).
+    Synonyms: prior year revenue, last year revenue, PY revenue
+- id: py_gross_margin
+  type: number
+  visibility: internal
+  expr_sql: PY_GROSS_MARGIN
+  description: Prior-year actual gross margin ($M).
+- id: py_marketing
+  type: number
+  visibility: internal
+  expr_sql: PY_MARKETING
+  description: Prior-year actual marketing ($M).
+- id: py_contribution_margin
+  type: number
+  visibility: internal
+  expr_sql: PY_CONTRIBUTION_MARGIN
+  description: Prior-year actual contribution margin ($M).
+- id: py_other_sga
+  type: number
+  visibility: internal
+  expr_sql: PY_OTHER_SGA
+  description: Prior-year actual SG&A excl. marketing ($M).
+- id: py_adj_ebitda
+  type: number
+  visibility: internal
+  expr_sql: PY_ADJ_EBITDA
+  description: |-
+    Prior-year actual Adj. EBITDA ($M).
+    Synonyms: prior year EBITDA, last year EBITDA
+- id: bu_gross_revenue
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, NET_REVENUE, 0)
+  description: |-
+    BU-basis net revenue, excl. Topps Eliminations ($M). Under bu_detail = 'NASE' this is Gross Revenue (NASE); BU Net Sales is SUM(net_revenue), not this.
+    Synonyms: BU gross revenue, NASE gross revenue
+- id: bu_cogs
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, COGS, 0)
+  description: |-
+    BU-basis total COGS, excl. Topps Eliminations ($M).
+    Synonyms: BU COGS, NASE COGS, GCP COGS
+- id: bu_std_mfg
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, MANUFACTURING, 0)
+  description: |-
+    BU-basis Standard Manufacturing COGS bucket = manufacturing ($M).
+    Synonyms: standard manufacturing, std mfg
+- id: bu_royalties
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, ROYALTIES, 0)
+  description: |-
+    BU-basis Royalties COGS bucket ($M).
+    Synonyms: BU royalties
+- id: bu_mg_shortfall
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, MG_SHORTFALL, 0)
+  description: |-
+    BU-basis MG Shortfalls COGS bucket ($M).
+    Synonyms: BU MG shortfalls, MG shortfalls
+- id: bu_autos_relics
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, AUTOS_RELICS, 0)
+  description: |-
+    BU-basis Autos & Relics COGS bucket ($M).
+    Synonyms: BU autos and relics
+- id: bu_other_cogs
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, NET_FREIGHT + PRODUCT_DEVELOPMENT + OBSOLESCENCE + COGS_COMPENSATION, 0)
+  description: |-
+    BU-basis Other COGS bucket = net_freight + product_development + obsolescence + cogs_compensation ($M).
+    Synonyms: other COGS, other COGS bucket
+- id: bu_gross_margin
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, GROSS_MARGIN, 0)
+  description: |-
+    BU-basis gross margin / Gross Profit, excl. Topps Eliminations ($M).
+    Synonyms: BU gross profit, NASE gross profit
+- id: bu_marketing
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, MARKETING, 0)
+  description: |-
+    BU-basis marketing ($M). GCP carries none.
+    Synonyms: BU marketing
+- id: bu_other_sga
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, OTHER_SGA, 0)
+  description: |-
+    BU-basis SG&A excluding marketing (= other_sga; North America excludes Key Litigation) ($M).
+    Synonyms: BU SG&A, NASE SG&A, GCP SG&A, BU SG&A excl marketing
+- id: bu_adj_ebitda
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, ADJ_EBITDA, 0)
+  description: |-
+    BU-basis Adj. EBITDA, excl. Topps Eliminations ($M). Equals adj_ebitda for segment = bu_page.
+    Synonyms: BU EBITDA, NASE EBITDA, GCP EBITDA
+- id: pfc_bu_gross_margin
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, PFC_GROSS_MARGIN, 0)
+  description: PFC BU-basis gross margin ($M).
+- id: pfc_bu_marketing
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, PFC_MARKETING, 0)
+  description: PFC BU-basis marketing ($M).
+- id: pfc_bu_other_sga
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, PFC_OTHER_SGA, 0)
+  description: PFC BU-basis SG&A excl. marketing ($M).
+- id: pfc_bu_adj_ebitda
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, PFC_ADJ_EBITDA, 0)
+  description: |-
+    PFC BU-basis Adj. EBITDA ($M).
+    Synonyms: prior forecast BU EBITDA
+- id: budget_bu_gross_margin
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, BUDGET_GROSS_MARGIN, 0)
+  description: Budget BU-basis gross margin ($M).
+- id: budget_bu_marketing
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, BUDGET_MARKETING, 0)
+  description: Budget BU-basis marketing ($M).
+- id: budget_bu_other_sga
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, BUDGET_OTHER_SGA, 0)
+  description: Budget BU-basis SG&A excl. marketing ($M).
+- id: budget_bu_adj_ebitda
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, BUDGET_ADJ_EBITDA, 0)
+  description: |-
+    Budget BU-basis Adj. EBITDA ($M).
+    Synonyms: budget BU EBITDA
+- id: py_bu_gross_margin
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, PY_GROSS_MARGIN, 0)
+  description: Prior-year actual BU-basis gross margin ($M).
+- id: py_bu_marketing
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, PY_MARKETING, 0)
+  description: Prior-year actual BU-basis marketing ($M).
+- id: py_bu_other_sga
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, PY_OTHER_SGA, 0)
+  description: Prior-year actual BU-basis SG&A excl. marketing ($M).
+- id: py_bu_adj_ebitda
+  type: number
+  visibility: internal
+  expr_sql: IFF(IN_BU_BASIS, PY_ADJ_EBITDA, 0)
+  description: |-
+    Prior-year actual BU-basis Adj. EBITDA ($M).
+    Synonyms: prior year BU EBITDA
+measures:
+- id: total_net_revenue
+  func: sum
+  of: net_revenue
+  description: |-
+    Total net revenue ($M) = SUM(net_revenue), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: revenue, net sales, sales, top line
+- id: total_manufacturing
+  func: sum
+  of: manufacturing
+  description: Total manufacturing COGS ($M) = SUM(manufacturing), in the selected version. Needs one version and one fiscal_year
+    filter.
+- id: total_royalties
+  func: sum
+  of: royalties
+  description: |-
+    Total royalties ($M) = SUM(royalties), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: royalty, license fees
+- id: total_autos_relics
+  func: sum
+  of: autos_relics
+  description: |-
+    Total autograph & relic costs ($M) = SUM(autos_relics), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: A&R, autos
+- id: total_product_development
+  func: sum
+  of: product_development
+  description: Total product development costs ($M) = SUM(product_development), in the selected version. Needs one version
+    and one fiscal_year filter.
+- id: total_net_freight
+  func: sum
+  of: net_freight
+  description: Total net freight ($M) = SUM(net_freight), in the selected version. Needs one version and one fiscal_year filter.
+- id: total_mg_shortfall
+  func: sum
+  of: mg_shortfall
+  description: Total MG shortfall ($M) = SUM(mg_shortfall), in the selected version. Needs one version and one fiscal_year
+    filter.
+- id: total_obsolescence
+  func: sum
+  of: obsolescence
+  description: Total inventory obsolescence ($M) = SUM(obsolescence), in the selected version. Needs one version and one fiscal_year
+    filter.
+- id: total_cogs_compensation
+  func: sum
+  of: cogs_compensation
+  description: Total COGS compensation ($M) = SUM(cogs_compensation), in the selected version. Needs one version and one fiscal_year
+    filter.
+- id: total_cogs
+  func: sum
+  of: cogs
+  description: |-
+    Total total COGS ($M) = SUM(cogs), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: cost of goods sold, cost of sales
+- id: total_gross_margin
+  func: sum
+  of: gross_margin
+  description: |-
+    Total gross margin ($M) = SUM(gross_margin), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: GM, gross profit
+- id: total_marketing
+  func: sum
+  of: marketing
+  description: |-
+    Total marketing ($M) = SUM(marketing), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: advertising, marketing spend
+- id: total_contribution_margin
+  func: sum
+  of: contribution_margin
+  description: |-
+    Total contribution margin ($M) = SUM(contribution_margin), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: CM
+- id: total_other_sga
+  func: sum
+  of: other_sga
+  description: |-
+    Total SG&A excl. marketing ($M) = SUM(other_sga), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: opex, operating expenses, overhead
+- id: total_sga_total
+  func: sum
+  of: sga_total
+  description: |-
+    Total total SG&A incl. marketing ($M) = SUM(sga_total), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: total SG&A
+- id: total_adj_ebitda
+  func: sum
+  of: adj_ebitda
+  description: |-
+    Total Adj. EBITDA ($M) = SUM(adj_ebitda), in the selected version. Needs one version and one fiscal_year filter.
+    Synonyms: EBITDA, adjusted EBITDA, AEBITDA, profit
+- id: total_pfc_net_revenue
+  func: sum
+  of: pfc_net_revenue
+  description: |-
+    Total PFC net revenue ($M) = SUM(pfc_net_revenue), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC revenue, PFC net sales, PFC sales, PFC top line
+- id: total_pfc_manufacturing
+  func: sum
+  of: pfc_manufacturing
+  description: Total PFC manufacturing COGS ($M) = SUM(pfc_manufacturing), from the prior forecast cycle (pfc_version_label)
+    on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one
+    version and one fiscal_year filter.
+- id: total_pfc_royalties
+  func: sum
+  of: pfc_royalties
+  description: |-
+    Total PFC royalties ($M) = SUM(pfc_royalties), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC royalty, PFC license fees
+- id: total_pfc_autos_relics
+  func: sum
+  of: pfc_autos_relics
+  description: |-
+    Total PFC autograph & relic costs ($M) = SUM(pfc_autos_relics), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC A&R, PFC autos
+- id: total_pfc_product_development
+  func: sum
+  of: pfc_product_development
+  description: Total PFC product development costs ($M) = SUM(pfc_product_development), from the prior forecast cycle (pfc_version_label)
+    on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one
+    version and one fiscal_year filter.
+- id: total_pfc_net_freight
+  func: sum
+  of: pfc_net_freight
+  description: Total PFC net freight ($M) = SUM(pfc_net_freight), from the prior forecast cycle (pfc_version_label) on the
+    same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version
+    and one fiscal_year filter.
+- id: total_pfc_cogs_compensation
+  func: sum
+  of: pfc_cogs_compensation
+  description: Total PFC COGS compensation ($M) = SUM(pfc_cogs_compensation), from the prior forecast cycle (pfc_version_label)
+    on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one
+    version and one fiscal_year filter.
+- id: total_pfc_cogs
+  func: sum
+  of: pfc_cogs
+  description: |-
+    Total PFC total COGS ($M) = SUM(pfc_cogs), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC cost of goods sold, PFC cost of sales
+- id: total_pfc_gross_margin
+  func: sum
+  of: pfc_gross_margin
+  description: |-
+    Total PFC gross margin ($M) = SUM(pfc_gross_margin), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC GM, PFC gross profit
+- id: total_pfc_marketing
+  func: sum
+  of: pfc_marketing
+  description: |-
+    Total PFC marketing ($M) = SUM(pfc_marketing), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC advertising, PFC marketing spend
+- id: total_pfc_contribution_margin
+  func: sum
+  of: pfc_contribution_margin
+  description: |-
+    Total PFC contribution margin ($M) = SUM(pfc_contribution_margin), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC CM
+- id: total_pfc_other_sga
+  func: sum
+  of: pfc_other_sga
+  description: |-
+    Total PFC SG&A excl. marketing ($M) = SUM(pfc_other_sga), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC opex, PFC operating expenses, PFC overhead
+- id: total_pfc_adj_ebitda
+  func: sum
+  of: pfc_adj_ebitda
+  description: |-
+    Total PFC Adj. EBITDA ($M) = SUM(pfc_adj_ebitda), from the prior forecast cycle (pfc_version_label) on the same rows. Use only for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a named cycle. Needs one version and one fiscal_year filter.
+    Synonyms: PFC EBITDA, PFC adjusted EBITDA, PFC AEBITDA, PFC profit
+- id: total_budget_net_revenue
+  func: sum
+  of: budget_net_revenue
+  description: |-
+    Total Budget net revenue ($M) = SUM(budget_net_revenue), from the Budget (Plan_<fiscal_year>) on the same rows; zero where no budget is loaded. Needs one version and one fiscal_year filter.
+    Synonyms: budget revenue, budget net sales, budget sales, budget top line
+- id: total_budget_gross_margin
+  func: sum
+  of: budget_gross_margin
+  description: |-
+    Total Budget gross margin ($M) = SUM(budget_gross_margin), from the Budget (Plan_<fiscal_year>) on the same rows; zero where no budget is loaded. Needs one version and one fiscal_year filter.
+    Synonyms: budget GM, budget gross profit
+- id: total_budget_marketing
+  func: sum
+  of: budget_marketing
+  description: |-
+    Total Budget marketing ($M) = SUM(budget_marketing), from the Budget (Plan_<fiscal_year>) on the same rows; zero where no budget is loaded. Needs one version and one fiscal_year filter.
+    Synonyms: budget advertising, budget marketing spend
+- id: total_budget_contribution_margin
+  func: sum
+  of: budget_contribution_margin
+  description: |-
+    Total Budget contribution margin ($M) = SUM(budget_contribution_margin), from the Budget (Plan_<fiscal_year>) on the same rows; zero where no budget is loaded. Needs one version and one fiscal_year filter.
+    Synonyms: budget CM
+- id: total_budget_other_sga
+  func: sum
+  of: budget_other_sga
+  description: |-
+    Total Budget SG&A excl. marketing ($M) = SUM(budget_other_sga), from the Budget (Plan_<fiscal_year>) on the same rows; zero where no budget is loaded. Needs one version and one fiscal_year filter.
+    Synonyms: budget opex, budget operating expenses, budget overhead
+- id: total_budget_adj_ebitda
+  func: sum
+  of: budget_adj_ebitda
+  description: |-
+    Total Budget Adj. EBITDA ($M) = SUM(budget_adj_ebitda), from the Budget (Plan_<fiscal_year>) on the same rows; zero where no budget is loaded. Needs one version and one fiscal_year filter.
+    Synonyms: budget EBITDA, budget adjusted EBITDA, budget AEBITDA, budget profit
+- id: total_py_net_revenue
+  func: sum
+  of: py_net_revenue
+  description: |-
+    Total Prior-year net revenue ($M) = SUM(py_net_revenue), prior-year ACTUAL for the same month and segment. Needs one version and one fiscal_year filter.
+    Synonyms: prior year revenue, prior year net sales, prior year sales, prior year top line
+- id: total_py_gross_margin
+  func: sum
+  of: py_gross_margin
+  description: |-
+    Total Prior-year gross margin ($M) = SUM(py_gross_margin), prior-year ACTUAL for the same month and segment. Needs one version and one fiscal_year filter.
+    Synonyms: prior year GM, prior year gross profit
+- id: total_py_marketing
+  func: sum
+  of: py_marketing
+  description: |-
+    Total Prior-year marketing ($M) = SUM(py_marketing), prior-year ACTUAL for the same month and segment. Needs one version and one fiscal_year filter.
+    Synonyms: prior year advertising, prior year marketing spend
+- id: total_py_contribution_margin
+  func: sum
+  of: py_contribution_margin
+  description: |-
+    Total Prior-year contribution margin ($M) = SUM(py_contribution_margin), prior-year ACTUAL for the same month and segment. Needs one version and one fiscal_year filter.
+    Synonyms: prior year CM
+- id: total_py_other_sga
+  func: sum
+  of: py_other_sga
+  description: |-
+    Total Prior-year SG&A excl. marketing ($M) = SUM(py_other_sga), prior-year ACTUAL for the same month and segment. Needs one version and one fiscal_year filter.
+    Synonyms: prior year opex, prior year operating expenses, prior year overhead
+- id: total_py_adj_ebitda
+  func: sum
+  of: py_adj_ebitda
+  description: |-
+    Total Prior-year Adj. EBITDA ($M) = SUM(py_adj_ebitda), prior-year ACTUAL for the same month and segment. Needs one version and one fiscal_year filter.
+    Synonyms: prior year EBITDA, prior year adjusted EBITDA, prior year AEBITDA, prior year profit
+- id: bu_net_sales
+  func: sum
+  of: net_revenue
+  description: |-
+    BU Net Sales ($M) = SUM(net_revenue), deliberately NOT restricted to in_bu_basis: under bu_page = 'North America' it includes Topps Eliminations (= revenue_segment North America); under bu_detail = 'NASE' it is NASE Net Sales. Denominator of every BU % measure.
+    Synonyms: BU net sales, BU net revenue, NASE net sales
+- id: total_bu_gross_revenue
+  func: sum
+  of: bu_gross_revenue
+  description: |-
+    SUM(bu_gross_revenue) ($M). BU-basis net revenue, excl. Topps Eliminations ($M). Under bu_detail = 'NASE' this is Gross Revenue (NASE); BU Net Sales is SUM(net_revenue), not this. Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU gross revenue, NASE gross revenue
+- id: total_bu_cogs
+  func: sum
+  of: bu_cogs
+  description: |-
+    SUM(bu_cogs) ($M). BU-basis total COGS, excl. Topps Eliminations ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU COGS, NASE COGS, GCP COGS
+- id: total_bu_std_mfg
+  func: sum
+  of: bu_std_mfg
+  description: |-
+    SUM(bu_std_mfg) ($M). BU-basis Standard Manufacturing COGS bucket = manufacturing ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: standard manufacturing, std mfg
+- id: total_bu_royalties
+  func: sum
+  of: bu_royalties
+  description: |-
+    SUM(bu_royalties) ($M). BU-basis Royalties COGS bucket ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU royalties
+- id: total_bu_mg_shortfall
+  func: sum
+  of: bu_mg_shortfall
+  description: |-
+    SUM(bu_mg_shortfall) ($M). BU-basis MG Shortfalls COGS bucket ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU MG shortfalls, MG shortfalls
+- id: total_bu_autos_relics
+  func: sum
+  of: bu_autos_relics
+  description: |-
+    SUM(bu_autos_relics) ($M). BU-basis Autos & Relics COGS bucket ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU autos and relics
+- id: total_bu_other_cogs
+  func: sum
+  of: bu_other_cogs
+  description: |-
+    SUM(bu_other_cogs) ($M). BU-basis Other COGS bucket = net_freight + product_development + obsolescence + cogs_compensation ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: other COGS, other COGS bucket
+- id: total_bu_gross_margin
+  func: sum
+  of: bu_gross_margin
+  description: |-
+    SUM(bu_gross_margin) ($M). BU-basis gross margin / Gross Profit, excl. Topps Eliminations ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU gross profit, NASE gross profit
+- id: total_bu_marketing
+  func: sum
+  of: bu_marketing
+  description: |-
+    SUM(bu_marketing) ($M). BU-basis marketing ($M). GCP carries none. Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU marketing
+- id: total_bu_other_sga
+  func: sum
+  of: bu_other_sga
+  description: |-
+    SUM(bu_other_sga) ($M). BU-basis SG&A excluding marketing (= other_sga; North America excludes Key Litigation) ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU SG&A, NASE SG&A, GCP SG&A, BU SG&A excl marketing
+- id: total_bu_adj_ebitda
+  func: sum
+  of: bu_adj_ebitda
+  description: |-
+    SUM(bu_adj_ebitda) ($M). BU-basis Adj. EBITDA, excl. Topps Eliminations ($M). Equals adj_ebitda for segment = bu_page. Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: BU EBITDA, NASE EBITDA, GCP EBITDA
+- id: total_pfc_bu_gross_margin
+  func: sum
+  of: pfc_bu_gross_margin
+  description: SUM(pfc_bu_gross_margin) ($M). PFC BU-basis gross margin ($M). Use with a bu_page filter (group by bu_detail
+    for NASE vs GCP).
+- id: total_pfc_bu_marketing
+  func: sum
+  of: pfc_bu_marketing
+  description: SUM(pfc_bu_marketing) ($M). PFC BU-basis marketing ($M). Use with a bu_page filter (group by bu_detail for
+    NASE vs GCP).
+- id: total_pfc_bu_other_sga
+  func: sum
+  of: pfc_bu_other_sga
+  description: SUM(pfc_bu_other_sga) ($M). PFC BU-basis SG&A excl. marketing ($M). Use with a bu_page filter (group by bu_detail
+    for NASE vs GCP).
+- id: total_pfc_bu_adj_ebitda
+  func: sum
+  of: pfc_bu_adj_ebitda
+  description: |-
+    SUM(pfc_bu_adj_ebitda) ($M). PFC BU-basis Adj. EBITDA ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: prior forecast BU EBITDA
+- id: total_budget_bu_gross_margin
+  func: sum
+  of: budget_bu_gross_margin
+  description: SUM(budget_bu_gross_margin) ($M). Budget BU-basis gross margin ($M). Use with a bu_page filter (group by bu_detail
+    for NASE vs GCP).
+- id: total_budget_bu_marketing
+  func: sum
+  of: budget_bu_marketing
+  description: SUM(budget_bu_marketing) ($M). Budget BU-basis marketing ($M). Use with a bu_page filter (group by bu_detail
+    for NASE vs GCP).
+- id: total_budget_bu_other_sga
+  func: sum
+  of: budget_bu_other_sga
+  description: SUM(budget_bu_other_sga) ($M). Budget BU-basis SG&A excl. marketing ($M). Use with a bu_page filter (group
+    by bu_detail for NASE vs GCP).
+- id: total_budget_bu_adj_ebitda
+  func: sum
+  of: budget_bu_adj_ebitda
+  description: |-
+    SUM(budget_bu_adj_ebitda) ($M). Budget BU-basis Adj. EBITDA ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: budget BU EBITDA
+- id: total_py_bu_gross_margin
+  func: sum
+  of: py_bu_gross_margin
+  description: SUM(py_bu_gross_margin) ($M). Prior-year actual BU-basis gross margin ($M). Use with a bu_page filter (group
+    by bu_detail for NASE vs GCP).
+- id: total_py_bu_marketing
+  func: sum
+  of: py_bu_marketing
+  description: SUM(py_bu_marketing) ($M). Prior-year actual BU-basis marketing ($M). Use with a bu_page filter (group by bu_detail
+    for NASE vs GCP).
+- id: total_py_bu_other_sga
+  func: sum
+  of: py_bu_other_sga
+  description: SUM(py_bu_other_sga) ($M). Prior-year actual BU-basis SG&A excl. marketing ($M). Use with a bu_page filter
+    (group by bu_detail for NASE vs GCP).
+- id: total_py_bu_adj_ebitda
+  func: sum
+  of: py_bu_adj_ebitda
+  description: |-
+    SUM(py_bu_adj_ebitda) ($M). Prior-year actual BU-basis Adj. EBITDA ($M). Use with a bu_page filter (group by bu_detail for NASE vs GCP).
+    Synonyms: prior year BU EBITDA
+- id: bu_gross_profit_pct
+  func_sql: 100 * ${total_bu_gross_margin} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    BU Gross Profit % in percent (x100) = 100 * SUM(bu_gross_margin) / BU Net Sales (SUM(net_revenue)). North America is deliberately lower than the consolidated NA GM % (denominator includes Topps Eliminations). Never report for GCP (its revenue nets to about zero).
+    Synonyms: BU gross margin %, BU GM %, gross profit %
+- id: bu_ebitda_margin
+  func_sql: 100 * ${total_bu_adj_ebitda} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    BU EBITDA margin in percent (x100) = 100 * SUM(bu_adj_ebitda) / BU Net Sales (SUM(net_revenue)). Never report for GCP (its revenue nets to about zero).
+    Synonyms: BU EBITDA margin, NASE EBITDA margin
+- id: bu_marketing_pct
+  func_sql: 100 * ${total_bu_marketing} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    BU Marketing % in percent (x100) = 100 * SUM(bu_marketing) / BU Net Sales (SUM(net_revenue)). Never report for GCP (its revenue nets to about zero).
+    Synonyms: BU marketing % of net sales
+- id: bu_other_sga_pct
+  func_sql: 100 * ${total_bu_other_sga} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    BU SG&A excl. marketing % in percent (x100) = 100 * SUM(bu_other_sga) / BU Net Sales (SUM(net_revenue)). Never report for GCP (its revenue nets to about zero).
+    Synonyms: BU SG&A %, NASE SG&A %
+- id: bu_std_mfg_pct
+  func_sql: 100 * ${total_bu_std_mfg} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    Standard Manufacturing COGS bucket % in percent (x100) = 100 * SUM(bu_std_mfg) / BU Net Sales (SUM(net_revenue)). North America: NASE only (bu_detail = 'NASE'). Never report for GCP (its revenue nets to about zero).
+    Synonyms: standard manufacturing %
+- id: bu_royalties_pct
+  func_sql: 100 * ${total_bu_royalties} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    Royalties COGS bucket % in percent (x100) = 100 * SUM(bu_royalties) / BU Net Sales (SUM(net_revenue)). North America: NASE only. Never report for GCP (its revenue nets to about zero).
+    Synonyms: royalty %, royalty rate
+- id: bu_mg_shortfall_pct
+  func_sql: 100 * ${total_bu_mg_shortfall} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    MG Shortfalls COGS bucket % in percent (x100) = 100 * SUM(bu_mg_shortfall) / BU Net Sales (SUM(net_revenue)). North America: NASE only. Never report for GCP (its revenue nets to about zero).
+    Synonyms: MG shortfall %
+- id: bu_autos_relics_pct
+  func_sql: 100 * ${total_bu_autos_relics} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    Autos & Relics COGS bucket % in percent (x100) = 100 * SUM(bu_autos_relics) / BU Net Sales (SUM(net_revenue)). North America: NASE only. Never report for GCP (its revenue nets to about zero).
+    Synonyms: autos and relics %
+- id: bu_other_cogs_pct
+  func_sql: 100 * ${total_bu_other_cogs} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    Other COGS bucket % (freight + product development + obsolescence + compensation) in percent (x100) = 100 * SUM(bu_other_cogs) / BU Net Sales (SUM(net_revenue)). North America: NASE only. Never report for GCP (its revenue nets to about zero).
+    Synonyms: other COGS %
+- id: bu_cogs_pct
+  func_sql: 100 * ${total_bu_cogs} / NULLIF(${bu_net_sales}, 0)
+  description: |-
+    BU total COGS % in percent (x100) = 100 * SUM(bu_cogs) / BU Net Sales (SUM(net_revenue)). Never report for GCP (its revenue nets to about zero).
+    Synonyms: COGS % of net sales, COGS mix
+- id: total_bu_adj_ebitda_vs_pfc
+  func_sql: ${total_bu_adj_ebitda} - ${total_pfc_bu_adj_ebitda}
+  description: |-
+    BU Adj. EBITDA change vs the prior forecast ($M) = SUM(bu_adj_ebitda) - SUM(pfc_bu_adj_ebitda).
+    Synonyms: BU EBITDA vs PFC, NASE EBITDA change
+- id: pfc_bu_ebitda_margin
+  func_sql: 100 * ${total_pfc_bu_adj_ebitda} / NULLIF(${total_pfc_net_revenue}, 0)
+  description: PFC BU EBITDA margin in percent (x100) = 100 * SUM(pfc_bu_adj_ebitda) / SUM(pfc_net_revenue). Never report
+    for GCP.
+- id: bu_ebitda_margin_bps_vs_pfc
+  func_sql: (${bu_ebitda_margin} - ${pfc_bu_ebitda_margin}) * 100
+  description: Change in BU EBITDA margin vs the prior forecast in basis points = (bu_ebitda_margin - pfc_bu_ebitda_margin)
+    * 100 (both in percent). Never report for GCP.
+- id: net_revenue_vs_pfc
+  func_sql: ${total_net_revenue} - ${total_pfc_net_revenue}
+  description: |-
+    Net revenue change vs the prior forecast (PFC) ($M) = SUM(net_revenue) - SUM(pfc_net_revenue) on the same rows. Only for the cycle immediately before; for a named cycle compare versions by version_label instead. Needs one version and one fiscal_year filter.
+    Synonyms: revenue vs PFC, revenue variance vs PFC
+- id: net_revenue_vs_budget
+  func_sql: ${total_net_revenue} - ${total_budget_net_revenue}
+  description: |-
+    Net revenue change vs Budget (Plan_<fiscal_year>) ($M) = SUM(net_revenue) - SUM(budget_net_revenue) on the same rows. Needs one version and one fiscal_year filter.
+    Synonyms: revenue vs budget, revenue variance vs budget
+- id: net_revenue_vs_py
+  func_sql: ${total_net_revenue} - ${total_py_net_revenue}
+  description: |-
+    Net revenue change vs prior-year actual ($M) = SUM(net_revenue) - SUM(py_net_revenue) on the same rows. Needs one version and one fiscal_year filter.
+    Synonyms: revenue vs prior year, revenue variance vs prior year
+- id: net_revenue_vs_pfc_pct
+  func_sql: 100 * ${net_revenue_vs_pfc} / NULLIF(${total_pfc_net_revenue}, 0)
+  description: |-
+    Net revenue growth vs the prior forecast in percent (x100) = 100 * (SUM(net_revenue) - SUM(pfc_net_revenue)) / SUM(pfc_net_revenue). Report as NM when the PFC base is <= 0.
+    Synonyms: revenue % change vs PFC
+- id: gross_margin_vs_pfc
+  func_sql: ${total_gross_margin} - ${total_pfc_gross_margin}
+  description: |-
+    Gross margin change vs the prior forecast (PFC) ($M) = SUM(gross_margin) - SUM(pfc_gross_margin) on the same rows. Only for the cycle immediately before; for a named cycle compare versions by version_label instead. Needs one version and one fiscal_year filter.
+    Synonyms: gross margin vs PFC, gross margin variance vs PFC
+- id: gross_margin_vs_budget
+  func_sql: ${total_gross_margin} - ${total_budget_gross_margin}
+  description: |-
+    Gross margin change vs Budget (Plan_<fiscal_year>) ($M) = SUM(gross_margin) - SUM(budget_gross_margin) on the same rows. Needs one version and one fiscal_year filter.
+    Synonyms: gross margin vs budget, gross margin variance vs budget
+- id: gross_margin_vs_py
+  func_sql: ${total_gross_margin} - ${total_py_gross_margin}
+  description: |-
+    Gross margin change vs prior-year actual ($M) = SUM(gross_margin) - SUM(py_gross_margin) on the same rows. Needs one version and one fiscal_year filter.
+    Synonyms: gross margin vs prior year, gross margin variance vs prior year
+- id: gross_margin_vs_pfc_pct
+  func_sql: 100 * ${gross_margin_vs_pfc} / NULLIF(${total_pfc_gross_margin}, 0)
+  description: |-
+    Gross margin growth vs the prior forecast in percent (x100) = 100 * (SUM(gross_margin) - SUM(pfc_gross_margin)) / SUM(pfc_gross_margin). Report as NM when the PFC base is <= 0.
+    Synonyms: gross margin % change vs PFC
+- id: contribution_margin_vs_pfc
+  func_sql: ${total_contribution_margin} - ${total_pfc_contribution_margin}
+  description: |-
+    Contribution margin change vs the prior forecast (PFC) ($M) = SUM(contribution_margin) - SUM(pfc_contribution_margin) on the same rows. Only for the cycle immediately before; for a named cycle compare versions by version_label instead. Needs one version and one fiscal_year filter.
+    Synonyms: contribution margin vs PFC, contribution margin variance vs PFC
+- id: contribution_margin_vs_budget
+  func_sql: ${total_contribution_margin} - ${total_budget_contribution_margin}
+  description: |-
+    Contribution margin change vs Budget (Plan_<fiscal_year>) ($M) = SUM(contribution_margin) - SUM(budget_contribution_margin) on the same rows. Needs one version and one fiscal_year filter.
+    Synonyms: contribution margin vs budget, contribution margin variance vs budget
+- id: contribution_margin_vs_py
+  func_sql: ${total_contribution_margin} - ${total_py_contribution_margin}
+  description: |-
+    Contribution margin change vs prior-year actual ($M) = SUM(contribution_margin) - SUM(py_contribution_margin) on the same rows. Needs one version and one fiscal_year filter.
+    Synonyms: contribution margin vs prior year, contribution margin variance vs prior year
+- id: contribution_margin_vs_pfc_pct
+  func_sql: 100 * ${contribution_margin_vs_pfc} / NULLIF(${total_pfc_contribution_margin}, 0)
+  description: |-
+    Contribution margin growth vs the prior forecast in percent (x100) = 100 * (SUM(contribution_margin) - SUM(pfc_contribution_margin)) / SUM(pfc_contribution_margin). Report as NM when the PFC base is <= 0.
+    Synonyms: contribution margin % change vs PFC
+- id: marketing_vs_pfc
+  func_sql: ${total_marketing} - ${total_pfc_marketing}
+  description: |-
+    Marketing change vs the prior forecast (PFC) ($M) = SUM(marketing) - SUM(pfc_marketing) on the same rows. For a cost line a positive value means higher cost (an EBITDA headwind). Only for the cycle immediately before; for a named cycle compare versions by version_label instead. Needs one version and one fiscal_year filter.
+    Synonyms: marketing vs PFC, marketing variance vs PFC
+- id: marketing_vs_budget
+  func_sql: ${total_marketing} - ${total_budget_marketing}
+  description: |-
+    Marketing change vs Budget (Plan_<fiscal_year>) ($M) = SUM(marketing) - SUM(budget_marketing) on the same rows. For a cost line a positive value means higher cost (an EBITDA headwind). Needs one version and one fiscal_year filter.
+    Synonyms: marketing vs budget, marketing variance vs budget
+- id: marketing_vs_py
+  func_sql: ${total_marketing} - ${total_py_marketing}
+  description: |-
+    Marketing change vs prior-year actual ($M) = SUM(marketing) - SUM(py_marketing) on the same rows. For a cost line a positive value means higher cost (an EBITDA headwind). Needs one version and one fiscal_year filter.
+    Synonyms: marketing vs prior year, marketing variance vs prior year
+- id: marketing_vs_pfc_pct
+  func_sql: 100 * ${marketing_vs_pfc} / NULLIF(${total_pfc_marketing}, 0)
+  description: |-
+    Marketing growth vs the prior forecast in percent (x100) = 100 * (SUM(marketing) - SUM(pfc_marketing)) / SUM(pfc_marketing). Report as NM when the PFC base is <= 0.
+    Synonyms: marketing % change vs PFC
+- id: other_sga_vs_pfc
+  func_sql: ${total_other_sga} - ${total_pfc_other_sga}
+  description: |-
+    Sg&a excl. marketing change vs the prior forecast (PFC) ($M) = SUM(other_sga) - SUM(pfc_other_sga) on the same rows. For a cost line a positive value means higher cost (an EBITDA headwind). Only for the cycle immediately before; for a named cycle compare versions by version_label instead. Needs one version and one fiscal_year filter.
+    Synonyms: SG&A excl. marketing vs PFC, SG&A excl. marketing variance vs PFC
+- id: other_sga_vs_budget
+  func_sql: ${total_other_sga} - ${total_budget_other_sga}
+  description: |-
+    Sg&a excl. marketing change vs Budget (Plan_<fiscal_year>) ($M) = SUM(other_sga) - SUM(budget_other_sga) on the same rows. For a cost line a positive value means higher cost (an EBITDA headwind). Needs one version and one fiscal_year filter.
+    Synonyms: SG&A excl. marketing vs budget, SG&A excl. marketing variance vs budget
+- id: other_sga_vs_py
+  func_sql: ${total_other_sga} - ${total_py_other_sga}
+  description: |-
+    Sg&a excl. marketing change vs prior-year actual ($M) = SUM(other_sga) - SUM(py_other_sga) on the same rows. For a cost line a positive value means higher cost (an EBITDA headwind). Needs one version and one fiscal_year filter.
+    Synonyms: SG&A excl. marketing vs prior year, SG&A excl. marketing variance vs prior year
+- id: other_sga_vs_pfc_pct
+  func_sql: 100 * ${other_sga_vs_pfc} / NULLIF(${total_pfc_other_sga}, 0)
+  description: |-
+    Sg&a excl. marketing growth vs the prior forecast in percent (x100) = 100 * (SUM(other_sga) - SUM(pfc_other_sga)) / SUM(pfc_other_sga). Report as NM when the PFC base is <= 0.
+    Synonyms: SG&A excl. marketing % change vs PFC
+- id: adj_ebitda_vs_pfc
+  func_sql: ${total_adj_ebitda} - ${total_pfc_adj_ebitda}
+  description: |-
+    Adj. ebitda change vs the prior forecast (PFC) ($M) = SUM(adj_ebitda) - SUM(pfc_adj_ebitda) on the same rows. Only for the cycle immediately before; for a named cycle compare versions by version_label instead. Needs one version and one fiscal_year filter.
+    Synonyms: EBITDA vs PFC, EBITDA variance vs PFC
+- id: adj_ebitda_vs_budget
+  func_sql: ${total_adj_ebitda} - ${total_budget_adj_ebitda}
+  description: |-
+    Adj. ebitda change vs Budget (Plan_<fiscal_year>) ($M) = SUM(adj_ebitda) - SUM(budget_adj_ebitda) on the same rows. Needs one version and one fiscal_year filter.
+    Synonyms: EBITDA vs budget, EBITDA variance vs budget
+- id: adj_ebitda_vs_py
+  func_sql: ${total_adj_ebitda} - ${total_py_adj_ebitda}
+  description: |-
+    Adj. ebitda change vs prior-year actual ($M) = SUM(adj_ebitda) - SUM(py_adj_ebitda) on the same rows. Needs one version and one fiscal_year filter.
+    Synonyms: EBITDA vs prior year, EBITDA variance vs prior year
+- id: adj_ebitda_vs_pfc_pct
+  func_sql: 100 * ${adj_ebitda_vs_pfc} / NULLIF(${total_pfc_adj_ebitda}, 0)
+  description: |-
+    Adj. ebitda growth vs the prior forecast in percent (x100) = 100 * (SUM(adj_ebitda) - SUM(pfc_adj_ebitda)) / SUM(pfc_adj_ebitda). Report as NM when the PFC base is <= 0.
+    Synonyms: EBITDA % change vs PFC
+- id: net_revenue_vs_budget_pct
+  func_sql: 100 * ${net_revenue_vs_budget} / NULLIF(${total_budget_net_revenue}, 0)
+  description: |-
+    Net revenue growth vs Budget (Plan_<fiscal_year>) in percent (x100) = 100 * (SUM(net_revenue) - SUM(budget_net_revenue)) / SUM(budget_net_revenue). Report as NM when the base is <= 0.
+    Synonyms: % vs budget, % vs plan
+- id: net_revenue_vs_py_pct
+  func_sql: 100 * ${net_revenue_vs_py} / NULLIF(${total_py_net_revenue}, 0)
+  description: |-
+    Net revenue growth vs prior-year actual in percent (x100) = 100 * (SUM(net_revenue) - SUM(py_net_revenue)) / SUM(py_net_revenue). Report as NM when the base is <= 0.
+    Synonyms: YoY growth, year over year %
+- id: adj_ebitda_vs_budget_pct
+  func_sql: 100 * ${adj_ebitda_vs_budget} / NULLIF(${total_budget_adj_ebitda}, 0)
+  description: |-
+    Adj. ebitda growth vs Budget (Plan_<fiscal_year>) in percent (x100) = 100 * (SUM(adj_ebitda) - SUM(budget_adj_ebitda)) / SUM(budget_adj_ebitda). Report as NM when the base is <= 0.
+    Synonyms: % vs budget, % vs plan
+- id: adj_ebitda_vs_py_pct
+  func_sql: 100 * ${adj_ebitda_vs_py} / NULLIF(${total_py_adj_ebitda}, 0)
+  description: |-
+    Adj. ebitda growth vs prior-year actual in percent (x100) = 100 * (SUM(adj_ebitda) - SUM(py_adj_ebitda)) / SUM(py_adj_ebitda). Report as NM when the base is <= 0.
+    Synonyms: YoY growth, year over year %
+- id: gross_margin_pct
+  func_sql: 100 * ${total_gross_margin} / NULLIF(${total_net_revenue}, 0)
+  description: |-
+    Gross margin % in percent (x100) = 100 * SUM(gross_margin) / SUM(net_revenue). Ratio of sums, never an average of row ratios.
+    Synonyms: GM %, gross margin percentage, gross margin rate
+- id: pfc_gross_margin_pct
+  func_sql: 100 * ${total_pfc_gross_margin} / NULLIF(${total_pfc_net_revenue}, 0)
+  description: PFC Gross margin % in percent (x100) = 100 * SUM(pfc_gross_margin) / SUM(pfc_net_revenue). Ratio of sums, never
+    an average of row ratios.
+- id: budget_gross_margin_pct
+  func_sql: 100 * ${total_budget_gross_margin} / NULLIF(${total_budget_net_revenue}, 0)
+  description: Budget Gross margin % in percent (x100) = 100 * SUM(budget_gross_margin) / SUM(budget_net_revenue). Ratio of
+    sums, never an average of row ratios.
+- id: gross_margin_bps_vs_pfc
+  func_sql: (${gross_margin_pct} - ${pfc_gross_margin_pct}) * 100
+  description: |-
+    Change in gross margin % vs the prior forecast in basis points = (gross_margin_pct - pfc_gross_margin_pct) * 100 (both in percent; equivalently (ratio - ratio_pfc) * 10000).
+    Synonyms: gross margin % bps vs pfc, margin change in bps
+- id: gross_margin_bps_vs_budget
+  func_sql: (${gross_margin_pct} - ${budget_gross_margin_pct}) * 100
+  description: |-
+    Change in gross margin % vs Budget in basis points = (gross_margin_pct - budget_gross_margin_pct) * 100 (both in percent; equivalently (ratio - ratio_budget) * 10000).
+    Synonyms: gross margin % bps vs budget, margin change in bps
+- id: contribution_margin_pct
+  func_sql: 100 * ${total_contribution_margin} / NULLIF(${total_net_revenue}, 0)
+  description: |-
+    Contribution margin % in percent (x100) = 100 * SUM(contribution_margin) / SUM(net_revenue). Ratio of sums, never an average of row ratios.
+    Synonyms: CM %
+- id: pfc_contribution_margin_pct
+  func_sql: 100 * ${total_pfc_contribution_margin} / NULLIF(${total_pfc_net_revenue}, 0)
+  description: PFC Contribution margin % in percent (x100) = 100 * SUM(pfc_contribution_margin) / SUM(pfc_net_revenue). Ratio
+    of sums, never an average of row ratios.
+- id: budget_contribution_margin_pct
+  func_sql: 100 * ${total_budget_contribution_margin} / NULLIF(${total_budget_net_revenue}, 0)
+  description: Budget Contribution margin % in percent (x100) = 100 * SUM(budget_contribution_margin) / SUM(budget_net_revenue).
+    Ratio of sums, never an average of row ratios.
+- id: contribution_margin_bps_vs_pfc
+  func_sql: (${contribution_margin_pct} - ${pfc_contribution_margin_pct}) * 100
+  description: |-
+    Change in contribution margin % vs the prior forecast in basis points = (contribution_margin_pct - pfc_contribution_margin_pct) * 100 (both in percent; equivalently (ratio - ratio_pfc) * 10000).
+    Synonyms: contribution margin % bps vs pfc, margin change in bps
+- id: contribution_margin_bps_vs_budget
+  func_sql: (${contribution_margin_pct} - ${budget_contribution_margin_pct}) * 100
+  description: |-
+    Change in contribution margin % vs Budget in basis points = (contribution_margin_pct - budget_contribution_margin_pct) * 100 (both in percent; equivalently (ratio - ratio_budget) * 10000).
+    Synonyms: contribution margin % bps vs budget, margin change in bps
+- id: ebitda_margin_pct
+  func_sql: 100 * ${total_adj_ebitda} / NULLIF(${total_net_revenue}, 0)
+  description: |-
+    Adj. EBITDA margin in percent (x100) = 100 * SUM(adj_ebitda) / SUM(net_revenue). Ratio of sums, never an average of row ratios.
+    Synonyms: EBITDA margin, EBITDA %, margin
+- id: pfc_ebitda_margin_pct
+  func_sql: 100 * ${total_pfc_adj_ebitda} / NULLIF(${total_pfc_net_revenue}, 0)
+  description: PFC Adj. EBITDA margin in percent (x100) = 100 * SUM(pfc_adj_ebitda) / SUM(pfc_net_revenue). Ratio of sums,
+    never an average of row ratios.
+- id: budget_ebitda_margin_pct
+  func_sql: 100 * ${total_budget_adj_ebitda} / NULLIF(${total_budget_net_revenue}, 0)
+  description: Budget Adj. EBITDA margin in percent (x100) = 100 * SUM(budget_adj_ebitda) / SUM(budget_net_revenue). Ratio
+    of sums, never an average of row ratios.
+- id: ebitda_margin_bps_vs_pfc
+  func_sql: (${ebitda_margin_pct} - ${pfc_ebitda_margin_pct}) * 100
+  description: |-
+    Change in adj. EBITDA margin vs the prior forecast in basis points = (ebitda_margin_pct - pfc_ebitda_margin_pct) * 100 (both in percent; equivalently (ratio - ratio_pfc) * 10000).
+    Synonyms: adj. EBITDA margin bps vs pfc, margin change in bps
+- id: ebitda_margin_bps_vs_budget
+  func_sql: (${ebitda_margin_pct} - ${budget_ebitda_margin_pct}) * 100
+  description: |-
+    Change in adj. EBITDA margin vs Budget in basis points = (ebitda_margin_pct - budget_ebitda_margin_pct) * 100 (both in percent; equivalently (ratio - ratio_budget) * 10000).
+    Synonyms: adj. EBITDA margin bps vs budget, margin change in bps
+- id: marketing_pct
+  func_sql: 100 * ${total_marketing} / NULLIF(${total_net_revenue}, 0)
+  description: |-
+    Marketing as % of net revenue in percent (x100) = 100 * SUM(marketing) / SUM(net_revenue). Ratio of sums, never an average of row ratios.
+    Synonyms: marketing % of sales, marketing rate
+- id: pfc_marketing_pct
+  func_sql: 100 * ${total_pfc_marketing} / NULLIF(${total_pfc_net_revenue}, 0)
+  description: PFC Marketing as % of net revenue in percent (x100) = 100 * SUM(pfc_marketing) / SUM(pfc_net_revenue). Ratio
+    of sums, never an average of row ratios.
+- id: budget_marketing_pct
+  func_sql: 100 * ${total_budget_marketing} / NULLIF(${total_budget_net_revenue}, 0)
+  description: Budget Marketing as % of net revenue in percent (x100) = 100 * SUM(budget_marketing) / SUM(budget_net_revenue).
+    Ratio of sums, never an average of row ratios.
+- id: marketing_bps_vs_pfc
+  func_sql: (${marketing_pct} - ${pfc_marketing_pct}) * 100
+  description: |-
+    Change in marketing as % of net revenue vs the prior forecast in basis points = (marketing_pct - pfc_marketing_pct) * 100 (both in percent; equivalently (ratio - ratio_pfc) * 10000).
+    Synonyms: marketing as % of net revenue bps vs pfc, margin change in bps
+- id: marketing_bps_vs_budget
+  func_sql: (${marketing_pct} - ${budget_marketing_pct}) * 100
+  description: |-
+    Change in marketing as % of net revenue vs Budget in basis points = (marketing_pct - budget_marketing_pct) * 100 (both in percent; equivalently (ratio - ratio_budget) * 10000).
+    Synonyms: marketing as % of net revenue bps vs budget, margin change in bps
+- id: latest_fc_net_revenue
+  func: sum
+  of: net_revenue
+  filters:
+  - is_latest_fc
+  description: |-
+    Net revenue in the latest Monthly Forecast only ($M) = SUM(net_revenue) where is_latest_fc. Safe without a version filter (pinned inside the measure) but still needs a fiscal_year filter.
+    Synonyms: latest forecast revenue, current forecast revenue
+- id: latest_fc_adj_ebitda
+  func: sum
+  of: adj_ebitda
+  filters:
+  - is_latest_fc
+  description: |-
+    Adj. EBITDA in the latest Monthly Forecast only ($M) = SUM(adj_ebitda) where is_latest_fc. Safe without a version filter (pinned inside the measure) but still needs a fiscal_year filter.
+    Synonyms: latest forecast EBITDA, current forecast EBITDA
+- id: prior_fc_net_revenue
+  func: sum
+  of: net_revenue
+  filters:
+  - is_prior_fc
+  description: |-
+    Net revenue in the Monthly Forecast immediately before the latest one ($M) = SUM(net_revenue) where is_prior_fc. Safe without a version filter (pinned inside the measure) but still needs a fiscal_year filter.
+    Synonyms: prior forecast revenue version
+- id: budget_version_net_revenue
+  func: sum
+  of: net_revenue
+  filters:
+  - expr_sql: ${version_type} = 'Budget'
+  description: |-
+    Net revenue from the Budget version rows ($M) = SUM(net_revenue) where version_type = 'Budget' (Plan_<year>). Safe without a version filter (pinned inside the measure) but still needs a fiscal_year filter. Each fiscal year has its own Plan_<year>.
+    Synonyms: budget revenue, plan revenue
+- id: actual_net_revenue
+  func: sum
+  of: net_revenue
+  filters:
+  - expr_sql: ${version_code} = 'Actual'
+  description: |-
+    Booked actual net revenue ($M) = SUM(net_revenue) where version_code = 'Actual'. Safe without a version filter (pinned inside the measure) but still needs a fiscal_year filter.
+    Synonyms: actual revenue, booked revenue
+- id: actual_months_net_revenue
+  func: sum
+  of: net_revenue
+  filters:
+  - expr_sql: ${af_flag} = 'A'
+  description: |-
+    Net revenue in months already closed inside the version ($M) = SUM(net_revenue) where af_flag = 'A'. YTD actual within a forecast. Needs one version and one fiscal_year filter.
+    Synonyms: YTD actual revenue, actualized revenue, closed-month revenue
+- id: forecast_months_net_revenue
+  func: sum
+  of: net_revenue
+  filters:
+  - expr_sql: ${af_flag} = 'F'
+  description: |-
+    Net revenue in months still in forecast ($M) = SUM(net_revenue) where af_flag = 'F'. Year-to-go / remaining revenue. Needs one version and one fiscal_year filter.
+    Synonyms: YTG revenue, year-to-go revenue, remaining revenue
+- id: forecast_month_count
+  func: count_distinct
+  of: month_number
+  filters:
+  - expr_sql: ${af_flag} = 'F'
+  description: Number of distinct months still in forecast (af_flag = 'F') in the version. Use for year-to-go monthly run-rate.
+- id: actual_months_revenue_pct
+  func_sql: 100 * ${actual_months_net_revenue} / NULLIF(${total_net_revenue}, 0)
+  description: |-
+    Share of the version's net revenue already booked as actual, in percent (x100) = 100 * actual_months_net_revenue / SUM(net_revenue).
+    Synonyms: % actualized, percent actual

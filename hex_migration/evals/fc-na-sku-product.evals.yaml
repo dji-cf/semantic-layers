@@ -1,0 +1,70 @@
+name: "FC North America SKU & product checks"
+id: fc-na-sku-product-checks
+cases:
+  - id: na-total-latest
+    prompt: "What is total North America revenue in the SKU forecast for FY26 in the latest forecast?"
+    attempts: 1
+    rubrics:
+      - id: na_total_matches
+        type: judge_final_answer
+        criterion: "Does the answer give FY2026 North America SKU-forecast revenue ($M) for the latest forecast (labelled with its version label), matching the expected SQL within rounding, ideally with the prior forecast (labelled) and budget for context?"
+        expectedSql:
+          sql: |
+            SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+                   ROUND(SUM(net_revenue), 2) AS sku_forecast_revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+                   ROUND(SUM(budget_net_revenue), 2) AS budget_revenue
+            FROM ORACLE_DATA_PROD.SANDBOX.FC_PRODUCT_SKU_V
+            WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+          dataConnectionId: "01a11848-a092-7729-a954-c8db37991b8b"
+  - id: releases-vs-budget
+    prompt: "Which product releases have the largest forecast-to-budget variance in North America?"
+    attempts: 1
+    rubrics:
+      - id: releases_vs_budget_matches
+        type: judge_final_answer
+        criterion: "Does the answer rank product releases (grouped by COA and product name) by absolute forecast-minus-budget revenue variance ($M) for the latest forecast and the latest cycle's fiscal year, with the top entries and values matching the expected SQL within rounding?"
+        expectedSql:
+          sql: |
+            SELECT MAX(version_label) AS version_label, coa, product_name, MIN(street_date) AS street_date, MIN(budget_street_date) AS budget_street_date,
+                   ROUND(SUM(net_revenue), 2) AS fc_revenue, ROUND(SUM(budget_net_revenue), 2) AS budget_revenue,
+                   ROUND(SUM(net_revenue) - SUM(budget_net_revenue), 2) AS revenue_vs_budget
+            FROM ORACLE_DATA_PROD.SANDBOX.FC_PRODUCT_SKU_V
+            WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+            GROUP BY coa, product_name
+            ORDER BY ABS(SUM(net_revenue) - SUM(budget_net_revenue)) DESC
+            LIMIT 20
+          dataConnectionId: "01a11848-a092-7729-a954-c8db37991b8b"
+  - id: channel-change-vs-pfc
+    prompt: "Which channels drove the change in North America revenue versus the prior forecast?"
+    attempts: 1
+    rubrics:
+      - id: channel_vs_pfc_matches
+        type: judge_final_answer
+        criterion: "Does the answer show revenue change vs the prior forecast ($M) by channel (channel group / channel), naming both version labels, ranked by absolute change, with the largest drivers and values matching the expected SQL within rounding?"
+        expectedSql:
+          sql: |
+            SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label, channel_group, channel_desc,
+                   ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+                   ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc
+            FROM ORACLE_DATA_PROD.SANDBOX.FC_PRODUCT_SKU_V
+            WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+            GROUP BY channel_group, channel_desc
+            ORDER BY ABS(SUM(net_revenue) - SUM(pfc_net_revenue)) DESC
+          dataConnectionId: "01a11848-a092-7729-a954-c8db37991b8b"
+  - id: street-date-moves
+    prompt: "Which product releases moved street date versus the prior forecast and what revenue moved with them?"
+    attempts: 1
+    rubrics:
+      - id: street_date_moves_match
+        type: judge_final_answer
+        criterion: "Does the answer list products whose street date was accelerated or delayed vs the prior forecast, with prior and current street dates and the revenue change vs the prior forecast ($M) for the latest cycle's fiscal year, matching the expected SQL within rounding?"
+        expectedSql:
+          sql: |
+            SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+                   product_name, street_date_move_vs_pfc, MIN(pfc_street_date) AS pfc_street_date, MIN(street_date) AS street_date,
+                   ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS fy_revenue_vs_pfc
+            FROM ORACLE_DATA_PROD.SANDBOX.FC_PRODUCT_SKU_V
+            WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND street_date_move_vs_pfc IN ('SD Accelerated', 'SD Delayed')
+            GROUP BY product_name, street_date_move_vs_pfc
+            ORDER BY ABS(SUM(net_revenue) - SUM(pfc_net_revenue)) DESC
+          dataConnectionId: "01a11848-a092-7729-a954-c8db37991b8b"

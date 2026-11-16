@@ -1,0 +1,731 @@
+name: FC_SEGMENT_PL
+description: >-
+  Fanatics Collectibles management P&L by forecast version, fiscal month and management segment.
+  Reproduces the Monthly Forecast deck (Revenue -> Gross Margin -> Contribution Margin -> Adj. EBITDA)
+  for Actual, Budget (Plan_<year>) and every Monthly Forecast cycle loaded in CARDPLN (is_latest_fc = newest loaded cycle).
+  All amounts are USD millions ($M). Fiscal year = calendar year.
+  Each row also carries the prior forecast cycle (PFC), Budget and prior-year (PY) Actual values for the
+  same month and segment, so variances vs PFC / Budget / PY need no joins.
+
+tables:
+  - name: fc_segment_pl
+    description: >-
+      One row per version_code x fiscal month (period_date) x leaf sub_segment. Amounts in $M.
+      CRITICAL: every query must filter to exactly ONE version_code (or group by version) — rows from
+      different versions must never be summed together. Totals are always SUM over segments; there are
+      no total rows in this table. Sources: ORACLE_DATA_PROD.FCT_EPM.CARDPLN_PL_BY_LOB_V2 (leaf members),
+      reconciled to the Monthly Forecast deck. Which cycle is latest is data-driven; never assume a month.
+    base_table:
+      database: ORACLE_DATA_PROD
+      schema: SANDBOX
+      table: FC_SEGMENT_PL_V
+
+    dimensions:
+      - name: version_code
+        synonyms: ["version", "scenario", "forecast version", "forecast cycle", "cycle"]
+        description: >-
+          Planning version code. 'Actual' = booked actuals; 'Plan_<year>' = that year's Budget; '<MON><YY>RF' =
+          Monthly Forecast for that cycle month (e.g. JUN26RF = June 2026 Forecast). Always filter to one,
+          except in the named-cycle comparison pattern.
+        expr: VERSION_CODE
+        data_type: TEXT
+        sample_values: ["SEP26RF", "AUG26RF", "JUL26RF", "Plan_2026", "Actual"]
+      - name: version_label
+        synonyms: ["forecast name", "FC name"]
+        description: Display label, e.g. 'Jun 2026 FC', 'Budget 2026', 'Actual'. Return it with every version-based figure.
+        expr: VERSION_LABEL
+        data_type: TEXT
+      - name: version_type
+        synonyms: ["scenario type"]
+        description: Actual / Budget / Monthly Forecast.
+        expr: VERSION_TYPE
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["Actual", "Budget", "Monthly Forecast"]
+      - name: pfc_version_code
+        synonyms: ["prior forecast version", "PFC version", "prior FC"]
+        description: >-
+          Version code of the cycle immediately before this Monthly Forecast (e.g. JUN26RF -> MAY26RF). The pfc_*
+          facts hold its values. Use pfc_* ONLY for 'prior forecast' / 'PFC' / 'last month' comparisons, never for a
+          named cycle.
+        expr: PFC_VERSION_CODE
+        data_type: TEXT
+      - name: pfc_version_label
+        synonyms: ["prior forecast name"]
+        description: Display label of the prior forecast cycle (the cycle the pfc_* facts come from).
+        expr: PFC_VERSION_LABEL
+        data_type: TEXT
+      - name: latest_fc_label
+        synonyms: ["latest forecast name", "current forecast label"]
+        description: Label of the newest loaded Monthly Forecast in this dataset (same value on every row).
+        expr: LATEST_FC_LABEL
+        data_type: TEXT
+      - name: is_latest_fc
+        synonyms: ["latest forecast", "current forecast", "most recent forecast", "this forecast"]
+        description: TRUE only for the most recent Monthly Forecast cycle. Use for 'latest forecast' questions.
+        expr: IS_LATEST_FC
+        data_type: BOOLEAN
+      - name: is_prior_fc
+        synonyms: ["previous forecast", "last month's forecast"]
+        description: TRUE only for the Monthly Forecast immediately before the latest one.
+        expr: IS_PRIOR_FC
+        data_type: BOOLEAN
+      - name: fiscal_year
+        synonyms: ["FY", "year"]
+        description: Fiscal year (= calendar year), e.g. 2026. FY26 = 2026.
+        expr: FISCAL_YEAR
+        data_type: NUMBER
+        sample_values: ["2026", "2027", "2025"]
+      - name: fiscal_quarter
+        synonyms: ["quarter", "qtr"]
+        description: Q1 (Jan-Mar), Q2 (Apr-Jun), Q3 (Jul-Sep), Q4 (Oct-Dec).
+        expr: FISCAL_QUARTER
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["Q1", "Q2", "Q3", "Q4"]
+      - name: fiscal_half
+        synonyms: ["half", "H1", "H2"]
+        description: H1 (Jan-Jun) or H2 (Jul-Dec).
+        expr: FISCAL_HALF
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["H1", "H2"]
+      - name: month_number
+        synonyms: ["month number"]
+        description: Calendar month number 1-12.
+        expr: MONTH_NUMBER
+        data_type: NUMBER
+      - name: month_name
+        synonyms: ["month"]
+        description: Three-letter month, e.g. JAN, SEP. Order by month_number.
+        expr: MONTH_NAME
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+      - name: af_flag
+        synonyms: ["actual or forecast", "A/F", "actualized", "closed month", "is actual"]
+        description: >-
+          'A' if the month is on or before the version's actuals-through date (booked actual inside the
+          forecast), 'F' if still forecast, 'Plan' for Budget. A total spanning A and F months is Forecast.
+        expr: AF_FLAG
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["A", "F", "Plan"]
+      - name: af_transition_vs_pfc
+        synonyms: ["true-up", "closed since prior forecast", "actualized since PFC"]
+        description: >-
+          For Monthly Forecasts: 'Actual in both' (closed before the PFC), 'Closed since PFC' (forecast in the
+          PFC, now actual -> change is a true-up to actuals), 'Forecast in both' (change is a re-forecast).
+        expr: AF_TRANSITION_VS_PFC
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["Actual in both", "Closed since PFC", "Forecast in both"]
+      - name: sub_segment
+        synonyms: ["sub-segment", "business unit", "LOB", "line of business"]
+        description: >-
+          Leaf management unit. North America = Topps Domestic + GCP Manufacturing + GCP Intercompany
+          Eliminations; International = Topps International + International Intercompany Eliminations;
+          Fanatics Collect = Fanatics Live (incl. Instant Rips) + Marketplace.
+        expr: SUB_SEGMENT
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["Topps Domestic", "GCP Manufacturing", "GCP Intercompany Eliminations", "Topps International",
+                        "International Intercompany Eliminations", "Topps Eliminations", "Digital", "Corporate OH",
+                        "Fanatics Live (incl. Instant Rips)", "Marketplace", "Key Litigation", "TCG"]
+      - name: segment
+        synonyms: ["management segment", "division", "EBITDA segment"]
+        description: >-
+          Deck segment for EBITDA / cost exhibits (Eliminations shown as its own row). Use for EBITDA,
+          SG&A, gross-margin-by-segment and margin questions. 'North America' here EXCLUDES Topps Eliminations.
+        expr: SEGMENT
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["North America", "International", "Eliminations", "Digital", "Corporate",
+                        "Fanatics Collect", "Key Litigation", "TCG"]
+      - name: revenue_segment
+        synonyms: ["revenue segment", "sales segment"]
+        description: >-
+          Deck segment for REVENUE exhibits: North America is shown net of eliminations (Topps Eliminations
+          folded into North America). Use for any revenue-by-segment or revenue-mix question.
+        expr: REVENUE_SEGMENT
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["North America", "International", "Digital", "Fanatics Collect", "Corporate", "Key Litigation", "TCG"]
+      - name: weekly_segment
+        synonyms: ["weekly segment"]
+        description: Weekly Finance Update grouping; Other = Corporate + Key Litigation + TCG; North America net of eliminations.
+        expr: WEEKLY_SEGMENT
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["North America", "International", "Digital", "Fanatics Collect", "Other"]
+      - name: segment_group
+        synonyms: ["segment group", "physical cards"]
+        description: >-
+          'Total Physical Cards' = North America + International + Eliminations. Others: Digital, Corporate,
+          Emerging Services (Fanatics Collect, Key Litigation, TCG).
+        expr: SEGMENT_GROUP
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["Total Physical Cards", "Digital", "Corporate", "Emerging Services"]
+      - name: is_emerging_services
+        synonyms: ["ES", "emerging services", "excl. ES", "ex-ES"]
+        description: >-
+          TRUE for Emerging Services (Fanatics Collect, Key Litigation, TCG). 'Total ex-Emerging Services'
+          = is_emerging_services = FALSE.
+        expr: IS_EMERGING_SERVICES
+        data_type: BOOLEAN
+      - name: gaap_business_unit
+        synonyms: ["GAAP BU", "business unit (GAAP)"]
+        description: GAAP Financial Statement package business unit label for the sub-segment.
+        expr: GAAP_BUSINESS_UNIT
+        data_type: TEXT
+      - name: segment_sort
+        description: Deck display order of the sub-segment; ORDER BY MIN(segment_sort) to list segments in deck order.
+        expr: SEGMENT_SORT
+        data_type: NUMBER
+      - name: bu_page
+        synonyms: ["BU", "BU page", "BU P&L", "business unit P&L", "drill-down", "drillable P&L"]
+        description: >-
+          Drillable P&L BU drill-down page: North America (Topps Domestic + GCP Manufacturing + GCP Intercompany
+          Eliminations, PLUS Topps Eliminations in Net Sales only), International, Digital, Fanatics Collect.
+          NULL for Corporate, Key Litigation and TCG (no BU page). Under a bu_page filter, SUM(net_revenue) is the
+          page's Net Sales (for North America it INCLUDES Topps Eliminations) while every bu_* fact excludes Topps
+          Eliminations -- so NA BU Net Sales = revenue_segment North America, and NA BU EBITDA = segment North America.
+        expr: BU_PAGE
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["North America", "International", "Digital", "Fanatics Collect"]
+      - name: bu_detail
+        synonyms: ["BU line", "NASE or GCP", "North America excl GCP"]
+        description: >-
+          Line block within a BU page. North America splits into 'NASE' (Topps Domestic, LB_302, plus Topps
+          Eliminations in Net Sales only) and 'GCP' (GCP Manufacturing + GCP Intercompany Eliminations, the card
+          printer; its revenue nets to about zero, so never report a GCP % or margin). Other pages: = bu_page.
+        expr: BU_DETAIL
+        data_type: TEXT
+        is_enum: true
+        sample_values: ["NASE", "GCP", "International", "Digital", "Fanatics Collect"]
+      - name: in_bu_basis
+        synonyms: ["BU basis"]
+        description: >-
+          TRUE if the row counts in BU COGS / gross margin / marketing / SG&A / EBITDA. FALSE only for Topps
+          Eliminations (North America page Net Sales only). NULL for sub-segments with no BU page. The bu_* facts
+          already apply it; do not filter on it when computing BU Net Sales.
+        expr: IN_BU_BASIS
+        data_type: BOOLEAN
+
+    time_dimensions:
+      - name: period_date
+        synonyms: ["month start", "period", "date"]
+        description: First day of the fiscal month.
+        expr: PERIOD_DATE
+        data_type: DATE
+      - name: cycle_month
+        synonyms: ["forecast cycle month", "forecast date"]
+        description: Month the Monthly Forecast was prepared for (JUN26RF -> 2026-06-01). Use to order forecast versions chronologically.
+        expr: CYCLE_MONTH
+        data_type: DATE
+      - name: actuals_through_date
+        synonyms: ["actuals through", "as of"]
+        description: Last day of the last closed (actual) month inside this version. JUN26RF -> 2026-05-31.
+        expr: ACTUALS_THROUGH_DATE
+        data_type: DATE
+
+    facts:
+      # ---- current version ----
+      - {name: net_revenue, synonyms: ["revenue", "net sales", "sales", "top line"], description: "Net revenue ($M).", expr: NET_REVENUE, data_type: NUMBER}
+      - {name: manufacturing, synonyms: ["manufacturing cost", "production cost"], description: "Manufacturing costs in COGS ($M).", expr: MANUFACTURING, data_type: NUMBER}
+      - {name: royalties, synonyms: ["royalty", "license fees"], description: "Royalties paid to licensors, in COGS ($M).", expr: ROYALTIES, data_type: NUMBER}
+      - {name: autos_relics, synonyms: ["autograph and relic", "A&R", "autos"], description: "Autograph & Relic costs, in COGS ($M).", expr: AUTOS_RELICS, data_type: NUMBER}
+      - {name: product_development, synonyms: ["other product costs", "product dev", "photography", "creative"], description: "Product development / other product costs, in COGS ($M).", expr: PRODUCT_DEVELOPMENT, data_type: NUMBER}
+      - {name: net_freight, synonyms: ["freight", "shipping"], description: "Net freight expense, in COGS ($M).", expr: NET_FREIGHT, data_type: NUMBER}
+      - {name: mg_shortfall, synonyms: ["minimum guarantee shortfall", "MG"], description: "Minimum-guarantee royalty shortfall, in COGS ($M).", expr: MG_SHORTFALL, data_type: NUMBER}
+      - {name: obsolescence, synonyms: ["inventory obsolescence", "write-down"], description: "Inventory obsolescence, in COGS ($M).", expr: OBSOLESCENCE, data_type: NUMBER}
+      - {name: cogs_compensation, synonyms: ["COGS labor", "manufacturing labor"], description: "Compensation charged to COGS (mostly GCP labor) ($M).", expr: COGS_COMPENSATION, data_type: NUMBER}
+      - {name: cogs, synonyms: ["cost of goods sold", "cost of sales", "product costs"], description: "Total COGS = manufacturing + royalties + autos_relics + product_development + net_freight + mg_shortfall + obsolescence + cogs_compensation ($M).", expr: COGS, data_type: NUMBER}
+      - {name: gross_margin, synonyms: ["GM", "gross profit"], description: "Gross margin = net_revenue - cogs ($M).", expr: GROSS_MARGIN, data_type: NUMBER}
+      - {name: marketing, synonyms: ["advertising", "marketing spend"], description: "Marketing / advertising ($M); sits above contribution margin.", expr: MARKETING, data_type: NUMBER}
+      - {name: contribution_margin, synonyms: ["CM"], description: "Contribution margin = gross_margin - marketing ($M).", expr: CONTRIBUTION_MARGIN, data_type: NUMBER}
+      - {name: other_sga, synonyms: ["SG&A excl marketing", "operating expenses", "opex", "overhead"], description: "SG&A excluding marketing (salaries, bonus, professional services, legal, allocations, etc.) ($M). For Key Litigation this is the litigation cost.", expr: OTHER_SGA, data_type: NUMBER}
+      - {name: sga_total, synonyms: ["total SG&A", "SG&A incl marketing"], description: "Total SG&A including marketing and key litigation = marketing + other_sga ($M). Deck SG&A Total.", expr: SGA_TOTAL, data_type: NUMBER}
+      - {name: adj_ebitda, synonyms: ["EBITDA", "adjusted EBITDA", "AEBITDA", "profit"], description: "Adjusted EBITDA = contribution_margin - other_sga ($M). Total across all segments = Adj. EBITDA incl. Emerging Services (default 'EBITDA').", expr: ADJ_EBITDA, data_type: NUMBER}
+      # ---- prior forecast cycle (PFC) ----
+      - {name: pfc_net_revenue, synonyms: ["prior forecast revenue", "PFC revenue", "last month's forecast revenue"], description: "Net revenue in the cycle immediately before this version (pfc_version_label) for the same month/segment ($M). Not for named-cycle comparisons.", expr: PFC_NET_REVENUE, data_type: NUMBER}
+      - {name: pfc_manufacturing, description: "PFC manufacturing ($M).", expr: PFC_MANUFACTURING, data_type: NUMBER}
+      - {name: pfc_royalties, description: "PFC royalties ($M).", expr: PFC_ROYALTIES, data_type: NUMBER}
+      - {name: pfc_autos_relics, description: "PFC autograph & relic costs ($M).", expr: PFC_AUTOS_RELICS, data_type: NUMBER}
+      - {name: pfc_product_development, description: "PFC product development ($M).", expr: PFC_PRODUCT_DEVELOPMENT, data_type: NUMBER}
+      - {name: pfc_net_freight, description: "PFC net freight ($M).", expr: PFC_NET_FREIGHT, data_type: NUMBER}
+      - {name: pfc_cogs_compensation, description: "PFC COGS compensation ($M).", expr: PFC_COGS_COMPENSATION, data_type: NUMBER}
+      - {name: pfc_cogs, description: "PFC total COGS ($M).", expr: PFC_COGS, data_type: NUMBER}
+      - {name: pfc_gross_margin, synonyms: ["prior forecast gross margin"], description: "PFC gross margin ($M).", expr: PFC_GROSS_MARGIN, data_type: NUMBER}
+      - {name: pfc_marketing, description: "PFC marketing ($M).", expr: PFC_MARKETING, data_type: NUMBER}
+      - {name: pfc_contribution_margin, description: "PFC contribution margin ($M).", expr: PFC_CONTRIBUTION_MARGIN, data_type: NUMBER}
+      - {name: pfc_other_sga, description: "PFC SG&A excl. marketing ($M).", expr: PFC_OTHER_SGA, data_type: NUMBER}
+      - {name: pfc_adj_ebitda, synonyms: ["prior forecast EBITDA", "PFC EBITDA"], description: "PFC Adj. EBITDA ($M).", expr: PFC_ADJ_EBITDA, data_type: NUMBER}
+      # ---- budget ----
+      - {name: budget_net_revenue, synonyms: ["budget revenue", "plan revenue"], description: "Budget (Plan_<fiscal_year>) net revenue for the same month/segment ($M). Zero where no budget exists (FY27+).", expr: BUDGET_NET_REVENUE, data_type: NUMBER}
+      - {name: budget_gross_margin, synonyms: ["budget GM"], description: "Budget gross margin ($M).", expr: BUDGET_GROSS_MARGIN, data_type: NUMBER}
+      - {name: budget_marketing, description: "Budget marketing ($M).", expr: BUDGET_MARKETING, data_type: NUMBER}
+      - {name: budget_contribution_margin, synonyms: ["budget CM"], description: "Budget contribution margin ($M).", expr: BUDGET_CONTRIBUTION_MARGIN, data_type: NUMBER}
+      - {name: budget_other_sga, description: "Budget SG&A excl. marketing ($M).", expr: BUDGET_OTHER_SGA, data_type: NUMBER}
+      - {name: budget_adj_ebitda, synonyms: ["budget EBITDA", "plan EBITDA"], description: "Budget Adj. EBITDA ($M).", expr: BUDGET_ADJ_EBITDA, data_type: NUMBER}
+      # ---- prior year actual ----
+      - {name: py_net_revenue, synonyms: ["prior year revenue", "last year revenue", "PY revenue"], description: "Prior-year ACTUAL net revenue for the same month/segment ($M).", expr: PY_NET_REVENUE, data_type: NUMBER}
+      - {name: py_gross_margin, description: "Prior-year actual gross margin ($M).", expr: PY_GROSS_MARGIN, data_type: NUMBER}
+      - {name: py_marketing, description: "Prior-year actual marketing ($M).", expr: PY_MARKETING, data_type: NUMBER}
+      - {name: py_contribution_margin, description: "Prior-year actual contribution margin ($M).", expr: PY_CONTRIBUTION_MARGIN, data_type: NUMBER}
+      - {name: py_other_sga, description: "Prior-year actual SG&A excl. marketing ($M).", expr: PY_OTHER_SGA, data_type: NUMBER}
+      - {name: py_adj_ebitda, synonyms: ["prior year EBITDA", "last year EBITDA"], description: "Prior-year actual Adj. EBITDA ($M).", expr: PY_ADJ_EBITDA, data_type: NUMBER}
+      # ---- BU P&L basis (Drillable P&L BU pages): 0 where in_bu_basis is not TRUE, i.e. Topps Eliminations and no-BU rows ----
+      - {name: bu_gross_revenue, synonyms: ["BU gross revenue", "NASE gross revenue"], description: "BU-basis net revenue, excl. Topps Eliminations ($M). Under bu_detail = 'NASE' this is Gross Revenue (NASE); BU Net Sales is SUM(net_revenue), not this.", expr: "IFF(IN_BU_BASIS, NET_REVENUE, 0)", data_type: NUMBER}
+      - {name: bu_cogs, synonyms: ["BU COGS", "NASE COGS", "GCP COGS"], description: "BU-basis total COGS, excl. Topps Eliminations ($M).", expr: "IFF(IN_BU_BASIS, COGS, 0)", data_type: NUMBER}
+      - {name: bu_std_mfg, synonyms: ["standard manufacturing", "std mfg"], description: "BU-basis Standard Manufacturing COGS bucket = manufacturing ($M).", expr: "IFF(IN_BU_BASIS, MANUFACTURING, 0)", data_type: NUMBER}
+      - {name: bu_royalties, synonyms: ["BU royalties"], description: "BU-basis Royalties COGS bucket ($M).", expr: "IFF(IN_BU_BASIS, ROYALTIES, 0)", data_type: NUMBER}
+      - {name: bu_mg_shortfall, synonyms: ["BU MG shortfalls", "MG shortfalls"], description: "BU-basis MG Shortfalls COGS bucket ($M).", expr: "IFF(IN_BU_BASIS, MG_SHORTFALL, 0)", data_type: NUMBER}
+      - {name: bu_autos_relics, synonyms: ["BU autos and relics"], description: "BU-basis Autos & Relics COGS bucket ($M).", expr: "IFF(IN_BU_BASIS, AUTOS_RELICS, 0)", data_type: NUMBER}
+      - {name: bu_other_cogs, synonyms: ["other COGS", "other COGS bucket"], description: "BU-basis Other COGS bucket = net_freight + product_development + obsolescence + cogs_compensation ($M).", expr: "IFF(IN_BU_BASIS, NET_FREIGHT + PRODUCT_DEVELOPMENT + OBSOLESCENCE + COGS_COMPENSATION, 0)", data_type: NUMBER}
+      - {name: bu_gross_margin, synonyms: ["BU gross profit", "NASE gross profit"], description: "BU-basis gross margin / Gross Profit, excl. Topps Eliminations ($M).", expr: "IFF(IN_BU_BASIS, GROSS_MARGIN, 0)", data_type: NUMBER}
+      - {name: bu_marketing, synonyms: ["BU marketing"], description: "BU-basis marketing ($M). GCP carries none.", expr: "IFF(IN_BU_BASIS, MARKETING, 0)", data_type: NUMBER}
+      - {name: bu_other_sga, synonyms: ["BU SG&A", "NASE SG&A", "GCP SG&A", "BU SG&A excl marketing"], description: "BU-basis SG&A excluding marketing (= other_sga; North America excludes Key Litigation) ($M).", expr: "IFF(IN_BU_BASIS, OTHER_SGA, 0)", data_type: NUMBER}
+      - {name: bu_adj_ebitda, synonyms: ["BU EBITDA", "NASE EBITDA", "GCP EBITDA"], description: "BU-basis Adj. EBITDA, excl. Topps Eliminations ($M). Equals adj_ebitda for segment = bu_page.", expr: "IFF(IN_BU_BASIS, ADJ_EBITDA, 0)", data_type: NUMBER}
+      - {name: pfc_bu_gross_margin, description: "PFC BU-basis gross margin ($M).", expr: "IFF(IN_BU_BASIS, PFC_GROSS_MARGIN, 0)", data_type: NUMBER}
+      - {name: pfc_bu_marketing, description: "PFC BU-basis marketing ($M).", expr: "IFF(IN_BU_BASIS, PFC_MARKETING, 0)", data_type: NUMBER}
+      - {name: pfc_bu_other_sga, description: "PFC BU-basis SG&A excl. marketing ($M).", expr: "IFF(IN_BU_BASIS, PFC_OTHER_SGA, 0)", data_type: NUMBER}
+      - {name: pfc_bu_adj_ebitda, synonyms: ["prior forecast BU EBITDA"], description: "PFC BU-basis Adj. EBITDA ($M).", expr: "IFF(IN_BU_BASIS, PFC_ADJ_EBITDA, 0)", data_type: NUMBER}
+      - {name: budget_bu_gross_margin, description: "Budget BU-basis gross margin ($M).", expr: "IFF(IN_BU_BASIS, BUDGET_GROSS_MARGIN, 0)", data_type: NUMBER}
+      - {name: budget_bu_marketing, description: "Budget BU-basis marketing ($M).", expr: "IFF(IN_BU_BASIS, BUDGET_MARKETING, 0)", data_type: NUMBER}
+      - {name: budget_bu_other_sga, description: "Budget BU-basis SG&A excl. marketing ($M).", expr: "IFF(IN_BU_BASIS, BUDGET_OTHER_SGA, 0)", data_type: NUMBER}
+      - {name: budget_bu_adj_ebitda, synonyms: ["budget BU EBITDA"], description: "Budget BU-basis Adj. EBITDA ($M).", expr: "IFF(IN_BU_BASIS, BUDGET_ADJ_EBITDA, 0)", data_type: NUMBER}
+      - {name: py_bu_gross_margin, description: "Prior-year actual BU-basis gross margin ($M).", expr: "IFF(IN_BU_BASIS, PY_GROSS_MARGIN, 0)", data_type: NUMBER}
+      - {name: py_bu_marketing, description: "Prior-year actual BU-basis marketing ($M).", expr: "IFF(IN_BU_BASIS, PY_MARKETING, 0)", data_type: NUMBER}
+      - {name: py_bu_other_sga, description: "Prior-year actual BU-basis SG&A excl. marketing ($M).", expr: "IFF(IN_BU_BASIS, PY_OTHER_SGA, 0)", data_type: NUMBER}
+      - {name: py_bu_adj_ebitda, synonyms: ["prior year BU EBITDA"], description: "Prior-year actual BU-basis Adj. EBITDA ($M).", expr: "IFF(IN_BU_BASIS, PY_ADJ_EBITDA, 0)", data_type: NUMBER}
+
+    metrics:
+      - {name: total_net_revenue, synonyms: ["total revenue"], description: "SUM of net_revenue ($M).", expr: SUM(net_revenue)}
+      - {name: total_cogs, description: "SUM of cogs ($M).", expr: SUM(cogs)}
+      - {name: total_gross_margin, synonyms: ["total GM"], description: "SUM of gross_margin ($M).", expr: SUM(gross_margin)}
+      - {name: total_marketing, description: "SUM of marketing ($M).", expr: SUM(marketing)}
+      - {name: total_contribution_margin, synonyms: ["total CM"], description: "SUM of contribution_margin ($M).", expr: SUM(contribution_margin)}
+      - {name: total_other_sga, description: "SUM of other_sga ($M).", expr: SUM(other_sga)}
+      - {name: total_adj_ebitda, synonyms: ["total EBITDA"], description: "SUM of adj_ebitda ($M).", expr: SUM(adj_ebitda)}
+      - {name: total_pfc_net_revenue, description: "SUM of pfc_net_revenue ($M).", expr: SUM(pfc_net_revenue)}
+      - {name: total_pfc_gross_margin, description: "SUM of pfc_gross_margin ($M).", expr: SUM(pfc_gross_margin)}
+      - {name: total_pfc_adj_ebitda, description: "SUM of pfc_adj_ebitda ($M).", expr: SUM(pfc_adj_ebitda)}
+      - {name: total_budget_net_revenue, description: "SUM of budget_net_revenue ($M).", expr: SUM(budget_net_revenue)}
+      - {name: total_budget_adj_ebitda, description: "SUM of budget_adj_ebitda ($M).", expr: SUM(budget_adj_ebitda)}
+      - {name: total_py_net_revenue, description: "SUM of py_net_revenue ($M).", expr: SUM(py_net_revenue)}
+      - {name: total_py_adj_ebitda, description: "SUM of py_adj_ebitda ($M).", expr: SUM(py_adj_ebitda)}
+      # ---- BU P&L (filter on bu_page; group by bu_detail for NASE vs GCP) ----
+      - {name: bu_net_sales, synonyms: ["BU net sales", "BU net revenue", "NASE net sales"], description: "BU Net Sales = SUM(net_revenue), deliberately NOT restricted to in_bu_basis: under bu_page = 'North America' it includes Topps Eliminations (= revenue_segment North America); under bu_detail = 'NASE' it is NASE Net Sales. Denominator of every BU % metric ($M).", expr: SUM(net_revenue)}
+      - {name: total_bu_cogs, description: "SUM of bu_cogs ($M).", expr: SUM(bu_cogs)}
+      - {name: total_bu_gross_margin, synonyms: ["BU gross profit total"], description: "SUM of bu_gross_margin ($M).", expr: SUM(bu_gross_margin)}
+      - {name: total_bu_marketing, description: "SUM of bu_marketing ($M).", expr: SUM(bu_marketing)}
+      - {name: total_bu_other_sga, description: "SUM of bu_other_sga ($M).", expr: SUM(bu_other_sga)}
+      - {name: total_bu_adj_ebitda, synonyms: ["BU EBITDA total"], description: "SUM of bu_adj_ebitda ($M).", expr: SUM(bu_adj_ebitda)}
+      - {name: bu_gross_profit_pct, synonyms: ["BU gross margin %", "BU GM %", "gross profit %"], description: "BU Gross Profit % = SUM(bu_gross_margin) / BU Net Sales (fraction). North America is deliberately lower than the consolidated NA GM % (denominator includes Topps Eliminations). Never report for GCP.", expr: "SUM(bu_gross_margin) / NULLIF(SUM(net_revenue), 0)"}
+      - {name: bu_ebitda_margin, synonyms: ["BU EBITDA margin", "NASE EBITDA margin"], description: "BU EBITDA margin = SUM(bu_adj_ebitda) / BU Net Sales (fraction). Never report for GCP.", expr: "SUM(bu_adj_ebitda) / NULLIF(SUM(net_revenue), 0)"}
+      - {name: bu_marketing_pct, synonyms: ["BU marketing % of net sales"], description: "SUM(bu_marketing) / BU Net Sales (fraction). Never report for GCP.", expr: "SUM(bu_marketing) / NULLIF(SUM(net_revenue), 0)"}
+      - {name: bu_other_sga_pct, synonyms: ["BU SG&A %", "NASE SG&A %"], description: "SUM(bu_other_sga) / BU Net Sales (fraction). Never report for GCP.", expr: "SUM(bu_other_sga) / NULLIF(SUM(net_revenue), 0)"}
+      - {name: bu_std_mfg_pct, synonyms: ["standard manufacturing %"], description: "Standard Manufacturing COGS bucket as a fraction of BU Net Sales. North America: NASE only (bu_detail = 'NASE').", expr: "SUM(bu_std_mfg) / NULLIF(SUM(net_revenue), 0)"}
+      - {name: bu_royalties_pct, synonyms: ["royalty %", "royalty rate"], description: "Royalties COGS bucket as a fraction of BU Net Sales. North America: NASE only.", expr: "SUM(bu_royalties) / NULLIF(SUM(net_revenue), 0)"}
+      - {name: bu_mg_shortfall_pct, synonyms: ["MG shortfall %"], description: "MG Shortfalls COGS bucket as a fraction of BU Net Sales. North America: NASE only.", expr: "SUM(bu_mg_shortfall) / NULLIF(SUM(net_revenue), 0)"}
+      - {name: bu_autos_relics_pct, synonyms: ["autos and relics %"], description: "Autos & Relics COGS bucket as a fraction of BU Net Sales. North America: NASE only.", expr: "SUM(bu_autos_relics) / NULLIF(SUM(net_revenue), 0)"}
+      - {name: bu_other_cogs_pct, synonyms: ["other COGS %"], description: "Other COGS bucket (freight + product development + obsolescence + compensation) as a fraction of BU Net Sales. North America: NASE only.", expr: "SUM(bu_other_cogs) / NULLIF(SUM(net_revenue), 0)"}
+
+verified_queries:
+  - name: fy_latest_vs_pfc
+    question: "What is our FY26 revenue, EBITDA and EBITDA margin in the latest forecast, and how did they change versus the prior forecast?"
+    use_as_onboarding_question: true
+    verified_by: Cortex Code (tied to Sep 2026 FC deck p.5)
+    sql: |
+      SELECT version_label, pfc_version_label,
+             ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+             ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+             ROUND(100 * (SUM(net_revenue) - SUM(pfc_net_revenue)) / NULLIF(SUM(pfc_net_revenue), 0), 2) AS revenue_vs_pfc_pct,
+             ROUND(SUM(adj_ebitda), 2) AS adj_ebitda, ROUND(SUM(pfc_adj_ebitda), 2) AS pfc_adj_ebitda,
+             ROUND(SUM(adj_ebitda) - SUM(pfc_adj_ebitda), 2) AS ebitda_vs_pfc,
+             ROUND(100 * SUM(adj_ebitda) / NULLIF(SUM(net_revenue), 0), 2) AS ebitda_margin_pct,
+             ROUND((SUM(adj_ebitda) / NULLIF(SUM(net_revenue), 0) - SUM(pfc_adj_ebitda) / NULLIF(SUM(pfc_net_revenue), 0)) * 10000, 2) AS ebitda_margin_bps_vs_pfc
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY version_label, pfc_version_label
+
+  - name: revenue_change_vs_pfc_by_segment
+    question: "Which segments drove the increase in FY26 revenue versus the prior forecast?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             revenue_segment,
+             ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+             ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+             ROUND(100 * (SUM(net_revenue) - SUM(pfc_net_revenue)) / NULLIF(SUM(pfc_net_revenue), 0), 2) AS revenue_vs_pfc_pct
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY revenue_segment
+      HAVING SUM(net_revenue) <> 0 OR SUM(pfc_net_revenue) <> 0
+      ORDER BY revenue_vs_pfc DESC
+
+  - name: ebitda_walk_vs_pfc_by_segment
+    question: "EBITDA is up versus the prior forecast. Walk me through that by segment."
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             segment,
+             ROUND(SUM(adj_ebitda), 2) AS adj_ebitda, ROUND(SUM(pfc_adj_ebitda), 2) AS pfc_adj_ebitda,
+             ROUND(SUM(adj_ebitda) - SUM(pfc_adj_ebitda), 2) AS ebitda_vs_pfc,
+             ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+             ROUND(SUM(gross_margin) - SUM(pfc_gross_margin), 2) AS gross_margin_vs_pfc,
+             ROUND(-(SUM(marketing) - SUM(pfc_marketing)), 2) AS marketing_impact_vs_pfc,
+             ROUND(-(SUM(other_sga) - SUM(pfc_other_sga)), 2) AS other_sga_impact_vs_pfc
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY segment
+      ORDER BY MIN(segment_sort)
+
+  - name: ytd_actual_vs_forecast_by_segment
+    question: "How much of FY26 revenue is already actual versus still forecast, by segment?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT MAX(version_label) AS version_label, revenue_segment,
+             ROUND(SUM(CASE WHEN af_flag = 'A' THEN net_revenue ELSE 0 END), 2) AS actual_ytd_revenue,
+             ROUND(SUM(CASE WHEN af_flag = 'F' THEN net_revenue ELSE 0 END), 2) AS forecast_ytg_revenue,
+             ROUND(SUM(net_revenue), 2) AS fy_revenue,
+             ROUND(100 * SUM(CASE WHEN af_flag = 'A' THEN net_revenue ELSE 0 END) / NULLIF(SUM(net_revenue), 0), 2) AS pct_actual
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY revenue_segment
+      HAVING SUM(net_revenue) <> 0
+      ORDER BY fy_revenue DESC
+
+  - name: revenue_mix_by_quarter
+    question: "How is our revenue mix across North America, International, Digital and Fanatics Collect changing quarter by quarter?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, fiscal_quarter, revenue_segment,
+             ROUND(SUM(net_revenue), 2) AS revenue,
+             ROUND(100 * SUM(net_revenue) / NULLIF(SUM(SUM(net_revenue)) OVER (PARTITION BY fiscal_quarter), 0), 2) AS revenue_mix_pct,
+             MAX(af_flag) AS af_flag
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+        AND revenue_segment IN ('North America', 'International', 'Digital', 'Fanatics Collect')
+      GROUP BY fiscal_quarter, revenue_segment
+      ORDER BY fiscal_quarter, revenue DESC
+
+  - name: gm_bps_vs_pfc_by_segment
+    question: "How did gross margin percentage change versus the prior forecast by segment, in basis points?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             segment,
+             ROUND(100 * SUM(gross_margin) / NULLIF(SUM(net_revenue), 0), 2) AS gm_pct,
+             ROUND(100 * SUM(pfc_gross_margin) / NULLIF(SUM(pfc_net_revenue), 0), 2) AS pfc_gm_pct,
+             ROUND((SUM(gross_margin) / NULLIF(SUM(net_revenue), 0) - SUM(pfc_gross_margin) / NULLIF(SUM(pfc_net_revenue), 0)) * 10000, 2) AS gm_bps_vs_pfc
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY segment
+      HAVING SUM(net_revenue) <> 0
+      ORDER BY MIN(segment_sort)
+
+  - name: monthly_revisions_vs_pfc
+    question: "Which months had the biggest revenue revisions versus the prior forecast?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             month_number, month_name, MAX(af_flag) AS af_flag,
+             ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+             ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+             ROUND(100 * (SUM(net_revenue) - SUM(pfc_net_revenue)) / NULLIF(SUM(pfc_net_revenue), 0), 2) AS revenue_vs_pfc_pct
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY month_number, month_name
+      ORDER BY ABS(SUM(net_revenue) - SUM(pfc_net_revenue)) DESC
+
+  - name: true_up_vs_reforecast
+    question: "Of the change versus the prior forecast, how much comes from closed months being trued up to actuals, and how much from months still in forecast?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             af_transition_vs_pfc,
+             ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+             ROUND(SUM(adj_ebitda) - SUM(pfc_adj_ebitda), 2) AS ebitda_vs_pfc
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY af_transition_vs_pfc
+      ORDER BY af_transition_vs_pfc
+
+  - name: required_ytg_vs_run_rate
+    question: "Given YTD actuals, what revenue do we need in the remaining forecast months to hit the full-year forecast, and how does that compare with the Q1-Q3 run rate?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, ROUND(SUM(CASE WHEN af_flag = 'A' THEN net_revenue ELSE 0 END), 2) AS ytd_actual_revenue,
+             ROUND(SUM(CASE WHEN af_flag = 'F' THEN net_revenue ELSE 0 END), 2) AS required_ytg_revenue,
+             COUNT(DISTINCT CASE WHEN af_flag = 'F' THEN month_number END) AS ytg_months,
+             ROUND(SUM(CASE WHEN af_flag = 'F' THEN net_revenue ELSE 0 END)
+               / NULLIF(COUNT(DISTINCT CASE WHEN af_flag = 'F' THEN month_number END), 0), 2) AS ytg_avg_monthly_revenue,
+             ROUND(SUM(CASE WHEN fiscal_quarter IN ('Q1', 'Q2', 'Q3') THEN net_revenue ELSE 0 END) / 9, 2) AS q1_q3_avg_monthly_revenue
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+
+  - name: q4_ebitda_margin_vs_q1_q3
+    question: "What is the implied Q4 EBITDA margin compared with Q1-Q3?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, CASE WHEN fiscal_quarter = 'Q4' THEN 'Q4' ELSE 'Q1-Q3' END AS period,
+             ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(adj_ebitda), 2) AS adj_ebitda,
+             ROUND(100 * SUM(adj_ebitda) / NULLIF(SUM(net_revenue), 0), 2) AS ebitda_margin_pct
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY CASE WHEN fiscal_quarter = 'Q4' THEN 'Q4' ELSE 'Q1-Q3' END
+      ORDER BY period
+
+  - name: latest_vs_budget_by_segment
+    question: "How does the current forecast compare to the 2026 budget for revenue and EBITDA by segment?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT MAX(version_label) AS version_label, segment,
+             ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(budget_net_revenue), 2) AS budget_revenue,
+             ROUND(SUM(net_revenue) - SUM(budget_net_revenue), 2) AS revenue_vs_budget,
+             ROUND(SUM(adj_ebitda), 2) AS adj_ebitda, ROUND(SUM(budget_adj_ebitda), 2) AS budget_adj_ebitda,
+             ROUND(SUM(adj_ebitda) - SUM(budget_adj_ebitda), 2) AS ebitda_vs_budget
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY segment
+      ORDER BY MIN(segment_sort)
+
+  - name: corporate_litigation_tcg_costs
+    question: "What are Corporate, Key Litigation and TCG costs for the year, and how did they change versus the prior forecast?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             segment,
+             ROUND(SUM(adj_ebitda), 2) AS adj_ebitda, ROUND(SUM(pfc_adj_ebitda), 2) AS pfc_adj_ebitda,
+             ROUND(SUM(adj_ebitda) - SUM(pfc_adj_ebitda), 2) AS ebitda_vs_pfc
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+        AND segment IN ('Corporate', 'Key Litigation', 'TCG')
+      GROUP BY segment
+      ORDER BY MIN(segment_sort)
+
+  - name: largest_segment_month_change
+    question: "Which segment and month has the largest dollar and percent change in revenue versus the prior forecast?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             revenue_segment, month_name, month_number,
+             ROUND(SUM(net_revenue), 2) AS revenue, ROUND(SUM(pfc_net_revenue), 2) AS pfc_revenue,
+             ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+             ROUND(100 * (SUM(net_revenue) - SUM(pfc_net_revenue)) / NULLIF(SUM(pfc_net_revenue), 0), 2) AS revenue_vs_pfc_pct
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026
+      GROUP BY revenue_segment, month_name, month_number
+      ORDER BY ABS(SUM(net_revenue) - SUM(pfc_net_revenue)) DESC
+      LIMIT 10
+
+  - name: pl_walk_for_segment
+    question: "For International, what is the walk from net revenue down to EBITDA?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, ROUND(SUM(net_revenue), 2) AS net_revenue,
+             ROUND(SUM(manufacturing), 2) AS manufacturing, ROUND(SUM(royalties), 2) AS royalties, ROUND(SUM(autos_relics), 2) AS autos_relics,
+             ROUND(SUM(product_development), 2) AS product_development, ROUND(SUM(net_freight), 2) AS net_freight,
+             ROUND(SUM(mg_shortfall), 2) AS mg_shortfall, ROUND(SUM(obsolescence), 2) AS obsolescence, ROUND(SUM(cogs_compensation), 2) AS cogs_compensation,
+             ROUND(SUM(gross_margin), 2) AS gross_margin, ROUND(SUM(marketing), 2) AS marketing,
+             ROUND(SUM(contribution_margin), 2) AS contribution_margin, ROUND(SUM(other_sga), 2) AS other_sga,
+             ROUND(SUM(adj_ebitda), 2) AS adj_ebitda
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND segment = 'International'
+
+  - name: fy_forecast_trend_across_cycles
+    question: "How has the FY26 revenue and EBITDA forecast moved across every monthly forecast?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT version_label, cycle_month,
+             ROUND(SUM(net_revenue), 2) AS fy_revenue, ROUND(SUM(adj_ebitda), 2) AS fy_adj_ebitda
+      FROM __fc_segment_pl
+      WHERE version_type = 'Monthly Forecast' AND fiscal_year = 2026
+      GROUP BY version_label, cycle_month
+      ORDER BY cycle_month
+
+  - name: q4_outlook_vs_pfc
+    question: "What is the Q4 outlook for revenue and EBITDA, and what changed since last month?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             segment,
+             ROUND(SUM(net_revenue), 2) AS q4_revenue, ROUND(SUM(net_revenue) - SUM(pfc_net_revenue), 2) AS revenue_vs_pfc,
+             ROUND(SUM(adj_ebitda), 2) AS q4_adj_ebitda, ROUND(SUM(adj_ebitda) - SUM(pfc_adj_ebitda), 2) AS ebitda_vs_pfc
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND fiscal_quarter = 'Q4'
+      GROUP BY segment
+      ORDER BY MIN(segment_sort)
+
+  - name: na_bu_pl_nase_gcp_total
+    question: "Show me the North America P&L for FY26 in the latest forecast, split NASE, GCP and total."
+    use_as_onboarding_question: true
+    verified_by: Cortex Code (tied to Drillable P&L North America page, SEP26RF)
+    sql: |
+      SELECT MAX(version_label) AS version_label, CASE WHEN GROUPING(bu_detail) = 1 THEN 'North America' ELSE bu_detail END AS bu_line,
+             ROUND(SUM(bu_gross_revenue), 2) AS gross_revenue,
+             ROUND(SUM(net_revenue) - SUM(bu_gross_revenue), 2) AS topps_eliminations,
+             ROUND(SUM(net_revenue), 2) AS net_sales,
+             ROUND(SUM(bu_cogs), 2) AS total_cogs,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' THEN SUM(bu_std_mfg) / NULLIF(SUM(net_revenue), 0) END, 2) AS std_mfg_pct,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' THEN SUM(bu_royalties) / NULLIF(SUM(net_revenue), 0) END, 2) AS royalties_pct,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' THEN SUM(bu_mg_shortfall) / NULLIF(SUM(net_revenue), 0) END, 2) AS mg_shortfall_pct,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' THEN SUM(bu_autos_relics) / NULLIF(SUM(net_revenue), 0) END, 2) AS autos_relics_pct,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' THEN SUM(bu_other_cogs) / NULLIF(SUM(net_revenue), 0) END, 2) AS other_cogs_pct,
+             ROUND(SUM(bu_gross_margin), 2) AS gross_profit,
+             ROUND(100 * CASE WHEN GROUPING(bu_detail) = 1 THEN SUM(bu_gross_margin) / NULLIF(SUM(net_revenue), 0) END, 2) AS gross_profit_pct,
+             ROUND(SUM(bu_marketing), 2) AS marketing,
+             ROUND(100 * CASE WHEN GROUPING(bu_detail) = 1 THEN SUM(bu_marketing) / NULLIF(SUM(net_revenue), 0) END, 2) AS marketing_pct,
+             ROUND(SUM(bu_other_sga), 2) AS sga_ex_marketing,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' THEN SUM(bu_other_sga) / NULLIF(SUM(net_revenue), 0) END, 2) AS sga_ex_marketing_pct,
+             ROUND(SUM(bu_adj_ebitda), 2) AS ebitda,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' OR GROUPING(bu_detail) = 1 THEN SUM(bu_adj_ebitda) / NULLIF(SUM(net_revenue), 0) END, 2) AS ebitda_margin_pct
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND bu_page = 'North America'
+      GROUP BY ROLLUP (bu_detail)
+      ORDER BY GROUPING(bu_detail), bu_detail DESC
+
+  - name: intl_bu_cogs_mix
+    question: "What is the International COGS mix as a percent of net sales for FY26 in the latest forecast?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, ROUND(SUM(net_revenue), 2) AS net_sales,
+             ROUND(SUM(bu_cogs), 2) AS total_cogs,
+             ROUND(100 * SUM(bu_cogs) / NULLIF(SUM(net_revenue), 0), 2) AS cogs_pct,
+             ROUND(100 * SUM(bu_std_mfg) / NULLIF(SUM(net_revenue), 0), 2) AS std_mfg_pct,
+             ROUND(100 * SUM(bu_royalties) / NULLIF(SUM(net_revenue), 0), 2) AS royalties_pct,
+             ROUND(100 * SUM(bu_mg_shortfall) / NULLIF(SUM(net_revenue), 0), 2) AS mg_shortfall_pct,
+             ROUND(100 * SUM(bu_autos_relics) / NULLIF(SUM(net_revenue), 0), 2) AS autos_relics_pct,
+             ROUND(100 * SUM(bu_other_cogs) / NULLIF(SUM(net_revenue), 0), 2) AS other_cogs_pct,
+             ROUND(100 * SUM(bu_gross_margin) / NULLIF(SUM(net_revenue), 0), 2) AS gross_margin_pct
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND bu_page = 'International'
+
+  - name: na_bu_ebitda_vs_pfc
+    question: "How did North America BU EBITDA change versus the prior forecast for FY26, NASE versus GCP?"
+    sql: |
+      SELECT MAX(version_label) AS version_label, MAX(pfc_version_label) AS pfc_version_label,
+             CASE WHEN GROUPING(bu_detail) = 1 THEN 'North America' ELSE bu_detail END AS bu_line,
+             ROUND(SUM(bu_adj_ebitda), 2) AS ebitda,
+             ROUND(SUM(pfc_bu_adj_ebitda), 2) AS pfc_ebitda,
+             ROUND(SUM(bu_adj_ebitda) - SUM(pfc_bu_adj_ebitda), 2) AS ebitda_vs_pfc,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' OR GROUPING(bu_detail) = 1 THEN SUM(bu_adj_ebitda) / NULLIF(SUM(net_revenue), 0) END, 2) AS ebitda_margin_pct,
+             ROUND(100 * CASE WHEN bu_detail = 'NASE' OR GROUPING(bu_detail) = 1 THEN SUM(pfc_bu_adj_ebitda) / NULLIF(SUM(pfc_net_revenue), 0) END, 2) AS pfc_ebitda_margin_pct,
+             ROUND(CASE WHEN bu_detail = 'NASE' OR GROUPING(bu_detail) = 1
+                        THEN (SUM(bu_adj_ebitda) / NULLIF(SUM(net_revenue), 0) - SUM(pfc_bu_adj_ebitda) / NULLIF(SUM(pfc_net_revenue), 0)) * 10000 END, 2) AS ebitda_margin_bps_vs_pfc
+      FROM __fc_segment_pl
+      WHERE is_latest_fc = TRUE AND fiscal_year = 2026 AND bu_page = 'North America'
+      GROUP BY ROLLUP (bu_detail)
+      ORDER BY GROUPING(bu_detail), bu_detail DESC
+
+  - name: revenue_by_segment_vs_named_cycle
+    question: "Which segments drove the change in FY26 revenue versus the Aug forecast?"
+    sql: |
+      SELECT revenue_segment,
+             MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+             MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+             ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)), 2) AS revenue,
+             ROUND(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS comparison_revenue,
+             ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS revenue_vs_comparison,
+             ROUND(100 * (SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)))
+                   / NULLIF(SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 0), 2) AS revenue_vs_comparison_pct
+      FROM __fc_segment_pl
+      WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026
+      GROUP BY revenue_segment
+      HAVING SUM(net_revenue) <> 0
+      ORDER BY revenue_vs_comparison DESC
+
+  - name: ebitda_by_segment_vs_named_cycle
+    question: "Walk me through the change in FY26 EBITDA versus the Aug forecast by segment."
+    sql: |
+      SELECT segment,
+             MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label,
+             MAX(IFF(version_code = 'AUG26RF', version_label, NULL)) AS comparison_version_label,
+             ROUND(SUM(IFF(is_latest_fc, adj_ebitda, 0)), 2) AS adj_ebitda,
+             ROUND(SUM(IFF(version_code = 'AUG26RF', adj_ebitda, 0)), 2) AS comparison_adj_ebitda,
+             ROUND(SUM(IFF(is_latest_fc, adj_ebitda, 0)) - SUM(IFF(version_code = 'AUG26RF', adj_ebitda, 0)), 2) AS ebitda_vs_comparison,
+             ROUND(SUM(IFF(is_latest_fc, net_revenue, 0)) - SUM(IFF(version_code = 'AUG26RF', net_revenue, 0)), 2) AS revenue_vs_comparison,
+             ROUND(SUM(IFF(is_latest_fc, gross_margin, 0)) - SUM(IFF(version_code = 'AUG26RF', gross_margin, 0)), 2) AS gross_margin_vs_comparison
+      FROM __fc_segment_pl
+      WHERE (is_latest_fc = TRUE OR version_code = 'AUG26RF') AND fiscal_year = 2026
+      GROUP BY segment
+      ORDER BY MIN(segment_sort)
+
+module_custom_instructions:
+  sql_generation: |-
+    UNITS AND GRAIN
+    - All amounts are USD millions ($M). One row per version_code x month x sub_segment.
+    - ALWAYS restrict to one version: 'latest forecast' / 'current forecast' / 'this forecast' -> is_latest_fc = TRUE;
+      'prior forecast' / 'PFC' / 'last month's forecast' -> is_prior_fc = TRUE; a named cycle -> version_code =
+      '<MON><YY>RF' (e.g. 'Jun forecast' -> 'JUN' || YY || 'RF', where YY = last two digits of the latest cycle's
+      year unless the user gives a year); 'budget' / 'plan' -> version_code = 'Plan_' || fiscal_year; booked actuals ->
+      version_code = 'Actual'. If no version is named, default to is_latest_fc = TRUE. Never sum across versions
+      except when grouping by version or in the named-cycle comparison pattern below.
+    - Which cycle is latest is decided by the data (is_latest_fc), never by these instructions. ALWAYS return
+      version_label in every query that reports a version-based figure, plus pfc_version_label when using pfc_*
+      facts, or the named comparison cycle's label, so the answer can be labelled from the result.
+    - 'FY26' = fiscal_year = 2026. Fiscal year = calendar year.
+    - ALWAYS restrict to one fiscal_year as well. Forecast versions contain the current year plus preliminary
+      next-year months (a cycle can span three fiscal years); summing them produces meaningless totals. If no year
+      is named, default to the fiscal year of the latest forecast cycle (YEAR(cycle_month) where is_latest_fc).
+      Only span years when the question explicitly asks for multiple years, and then GROUP BY fiscal_year.
+    - Next-year months inside a Monthly Forecast are a preliminary view, not a budget; label them so.
+
+    ROUNDING (output display)
+    - Wrap EVERY numeric output column of the FINAL SELECT in ROUND(<expr>, 2) so results show to the hundredths
+      place (e.g. ROUND(SUM(net_revenue), 2)).
+    - Ratios, margins, mix and growth rates are output IN PERCENT: ROUND(100 * <ratio>, 2) AS <name>_pct (38.69,
+      not 0.39). Basis points: ROUND((ratio_now - ratio_comparison) * 10000, 2) AS <name>_bps. Ratio metrics
+      (bu_*_pct, bu_ebitda_margin) return fractions -- multiply by 100 when displaying them.
+    - Round ONLY in the final projection. Never round inside CTEs / subqueries, before an aggregate, or in WHERE,
+      HAVING or ORDER BY -- compute with full precision, then round what is displayed.
+    - Do not round dimension / key columns (fiscal_year, month_number, segment_sort) or integer counts.
+
+    COMPARISONS (never self-join)
+    - vs prior forecast / vs PFC / since last month / vs last month's forecast: current fact minus pfc_<fact> on the
+      same rows; % = 100 * delta / NULLIF(SUM(pfc_<fact>), 0). Return pfc_version_label.
+    - vs a NAMED cycle (e.g. 'vs the Jun forecast'): do NOT use pfc_* (pfc_* is only the cycle immediately before).
+      Use conditional aggregation over the two versions:
+        WHERE (is_latest_fc = TRUE OR version_code = '<NAMED>') AND fiscal_year = <FY>
+        SUM(IFF(is_latest_fc, <fact>, 0)) AS current_x, SUM(IFF(version_code = '<NAMED>', <fact>, 0)) AS named_x,
+        SUM(IFF(is_latest_fc, <fact>, 0)) - SUM(IFF(version_code = '<NAMED>', <fact>, 0)) AS x_vs_named
+      and return MAX(IFF(is_latest_fc, version_label, NULL)) AS version_label and
+      MAX(IFF(version_code = '<NAMED>', version_label, NULL)) AS comparison_version_label. For a pair where neither
+      side is the latest (e.g. 'Jun vs May forecast'), use the same pattern with two version_codes.
+    - vs budget / plan: current fact minus budget_<fact>. Budget exists only where a Plan_<fiscal_year> is loaded.
+    - vs prior year / YoY: current fact minus py_<fact> (PY is always the prior-year ACTUAL).
+    - Margin % = SUM(numerator) / NULLIF(SUM(net_revenue),0). Never average row-level ratios.
+    - Margin changes are reported in basis points: (margin_now - margin_comparison) * 10000.
+    - Report growth % as NM (not meaningful) when the comparison base is <= 0.
+
+    SEGMENTS
+    - Revenue by segment -> group by revenue_segment (North America net of eliminations).
+    - EBITDA, margins, costs by segment -> group by segment (Eliminations shown as its own row).
+    - When a question asks for revenue AND EBITDA by segment together, group by segment (EBITDA basis) and also
+      return revenue; note that deck revenue for North America = North America + Eliminations.
+    - Total company / 'Total' = all rows (incl. Emerging Services). 'Total ex-ES' / 'excl. Emerging Services' ->
+      is_emerging_services = FALSE. 'Total Physical Cards' -> segment_group = 'Total Physical Cards'.
+    - 'Collect' means the Fanatics Collect segment (Live + Marketplace). 'domestic' / 'US' = North America.
+      'NASE' is the North America BU line excl. GCP -> bu_detail = 'NASE' (see BU P&L below).
+    - Generic 'EBITDA' = adj_ebitda summed over ALL segments (incl. Emerging Services).
+    - Order segments with ORDER BY MIN(segment_sort).
+    - BU P&L / drill-down / 'NA P&L' / 'North America P&L' / 'International P&L' / 'NASE' / 'GCP' / COGS mix or
+      COGS buckets questions -> filter bu_page = '<page>' (North America, International, Digital, Fanatics Collect)
+      and use the BU facts: bu_cogs, bu_std_mfg, bu_royalties, bu_mg_shortfall, bu_autos_relics, bu_other_cogs,
+      bu_gross_margin, bu_marketing, bu_other_sga, bu_adj_ebitda (and pfc_bu_* / budget_bu_* / py_bu_* to compare).
+      BU Net Sales = SUM(net_revenue) under the bu_page filter (NOT bu_gross_revenue): for North America it includes
+      Topps Eliminations, which the bu_* facts exclude. Every BU % = SUM(bu_<line>) / NULLIF(SUM(net_revenue), 0).
+    - North America BU page: group by bu_detail (NASE, GCP) and also return the NA total (GROUP BY ROLLUP(bu_detail)).
+      NASE % rows (COGS buckets, SG&A %, EBITDA margin) divide by NASE Net Sales (the bu_detail = 'NASE' group);
+      NA-total % rows (Gross Profit %, Marketing %, EBITDA margin) divide by NA Net Sales (all of bu_page). COGS buckets
+      on the NA page are NASE-only; GCP COGS is one line. NEVER report a GCP %, margin or bucket % (GCP revenue nets to
+      about zero). NA BU Gross Profit % is lower than the consolidated NA GM % by design (Topps in the denominator).
+    - Consolidated segment questions (no BU / drill-down / NASE / GCP wording) keep using segment / revenue_segment.
+    - Corporate, Eliminations, Key Litigation and TCG have no BU page; answer those with segment.
+
+    ACTUAL vs FORECAST
+    - af_flag = 'A' months are booked actuals inside the forecast; 'F' months are forecast. YTD actual = af_flag='A';
+      year-to-go / remaining = af_flag='F'. Return MAX(af_flag) or the af split when listing months or quarters.
+    - True-up vs re-forecast decomposition: group the PFC delta by af_transition_vs_pfc
+      ('Closed since PFC' = true-up to actuals; 'Forecast in both' = change to months still forecast).
+    - Forecast trend across cycles: version_type = 'Monthly Forecast', group by version_label, order by cycle_month.
+  question_categorization: |-
+    This model covers the management P&L (revenue, COGS lines, gross margin, marketing, contribution margin, SG&A,
+    Adj. EBITDA) by segment and month for Actual, Budget and Monthly Forecast versions.
+    It does NOT contain: the Weekly Latest Outlook / last-week (LW) figures, Risks & Opportunities items, the hedge,
+    revenue by license / sport, SKU / channel / product-release detail, free cash flow, headcount, Collect GMV,
+    inventory, or FX impacts. For those, answer that the data is not in this model rather than guessing.
+    It contains numbers only, not narrative explanations; 'why' questions should be answered with the quantified
+    line-item drivers (revenue, COGS components, marketing, SG&A) and a note that commentary lives in the deck.

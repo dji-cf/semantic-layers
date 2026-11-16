@@ -1,0 +1,11 @@
+# Hex Context Sync config - for PHASE 2 (git as source of truth). Not used while the models are being
+# refined in the Hex app: synced resources become READ-ONLY in Hex.
+# Fill in the semantic project id (Context Studio > Semantic models > ... > Copy ID).
+semanticProjects:
+  - id: <HEX_SEMANTIC_PROJECT_ID>
+    path: semantic
+guides:
+  - pattern: guides/*.md
+evals:
+  suites:
+    - pattern: evals/*.evals.yaml
